@@ -1,0 +1,21 @@
+# supabase/config.toml
+# Configuração mínima para deploy das Edge Functions do iNotário.
+# O project_id é apenas um rótulo local; o destino real é definido por
+# `supabase link --project-ref <REF>`.
+
+project_id = "inotario"
+
+# A Artemis (chat, compile, intake) é chamada pelo app autenticado:
+# mantém a verificação de JWT (padrão = true).
+
+# O portal do cliente é acessado por LINK PÚBLICO (sem login):
+# a segurança vem da validação do token + service role dentro da função.
+[functions.cliente-portal]
+verify_jwt = false
+
+[functions.intake-publico]
+verify_jwt = false
+
+# Voz em streaming do atendimento externo (token do atendimento é a segurança):
+[functions.voz-stream]
+verify_jwt = false
