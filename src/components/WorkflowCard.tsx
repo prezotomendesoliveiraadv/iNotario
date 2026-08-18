@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import Modal from './Modal'
 import { dataCurta, dataHora } from '../lib/tempo'
 import type { Solicitacao } from '../lib/types'
 import {
@@ -28,6 +29,7 @@ export default function WorkflowCard({ solic, onChange }: { solic: Solicitacao; 
   const [emol, setEmol] = useState<string>(solic.emolumentos != null ? String(solic.emolumentos) : '')
   const [imp, setImp] = useState<string>(solic.impostos != null ? String(solic.impostos) : '')
   const [minutaId, setMinutaId] = useState<string | null>(null)
+  const [avisoVersao, setAvisoVersao] = useState<number | null>(null)
   const [conteudo, setConteudo] = useState('')
   const [saidas, setSaidas] = useState<Saida[]>([])
   const [log, setLog] = useState<WorkflowLog[]>([])
@@ -74,6 +76,7 @@ export default function WorkflowCard({ solic, onChange }: { solic: Solicitacao; 
   async function baixarSaida(s: Saida) { const u = await urlSaida(s.storage_path); if (u) window.open(u, '_blank') }
 
   return (
+    <>
     <div className="card p-5 mb-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h2 className="font-semibold text-navy">Workflow do cartório</h2>
@@ -138,7 +141,11 @@ export default function WorkflowCard({ solic, onChange }: { solic: Solicitacao; 
         <div className="label">3 · Documento (editável antes do PDF final)</div>
         <textarea className="input" style={{ minHeight: 120, fontFamily: 'Georgia, serif' }} value={conteudo} onChange={e => setConteudo(e.target.value)} placeholder="A minuta aparece aqui após a compilação pela Artemis. Edite antes de gerar o PDF." />
         <div className="flex flex-wrap gap-2 mt-2">
-          <button className="btn-ghost" disabled={!minutaId || busy === 'sav'} onClick={() => run('sav', () => salvarMinuta(minutaId!, conteudo, solic.id), 'Minuta salva.')}>Salvar edição</button>
+          <button className="btn-ghost" disabled={!conteudo.trim() || busy === 'sav'}
+            onClick={() => run('sav', async () => {
+              const { versao } = await salvarMinuta(solic.id, conteudo)
+              setAvisoVersao(versao)
+            })}>Salvar edição</button>
           <button className="btn-ghost" disabled={!conteudo} onClick={() => baixarDoc(conteudo, `Minuta-${solic.protocolo ?? 'iNotario'}`)}>Baixar .doc</button>
           <button className="btn-ghost" disabled={!conteudo || busy === 'pdfr'} onClick={() => run('pdfr', () => gerarSaidaPDF(solic.id, conteudo, 'rascunho'), 'Rascunho PDF gerado.')}>Gerar rascunho PDF</button>
           <button className="btn-primary" disabled={!conteudo || (etapa !== 'finalizacao' && etapa !== 'concluida') || busy === 'pdff'} onClick={() => run('pdff', () => gerarSaidaPDF(solic.id, conteudo, 'final'), 'PDF final gerado.')}>Gerar PDF final</button>
@@ -212,5 +219,21 @@ export default function WorkflowCard({ solic, onChange }: { solic: Solicitacao; 
       {erro && <div className="text-sm text-red-600 mt-3">{erro}</div>}
       {msg && <div className="text-sm text-emerald-700 mt-3">{msg}</div>}
     </div>
+
+      <Modal
+        aberto={avisoVersao !== null}
+        apenasAviso
+        titulo="Nova versão da minuta salva"
+        onFechar={() => setAvisoVersao(null)}
+      >
+        <p>
+          Sua edição manual foi gravada como a <b>versão {avisoVersao}</b> da minuta.
+        </p>
+        <p style={{ marginTop: '.5rem', color: '#6B7280' }}>
+          A versão anterior continua disponível no histórico e na cadeia de custódia —
+          nada foi sobrescrito.
+        </p>
+      </Modal>
+    </>
   )
 }

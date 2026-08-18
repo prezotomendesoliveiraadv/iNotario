@@ -2,6 +2,19 @@ import { supabase } from './supabase'
 import { mensagemErroFuncao } from './erros'
 
 export type TipoDocInstrucao = 'rg' | 'cnh' | 'matricula' | 'certidao' | 'procuracao' | 'compromisso' | 'outro'
+
+/** Confronto do contrato com a matrícula do imóvel. */
+export interface ItemConfronto {
+  campo: string; contrato: string; matricula: string
+  status: 'confere' | 'divergente' | 'ausente'; observacao?: string
+}
+export interface Confronto {
+  itens: ItemConfronto[]
+  veredito: 'apto' | 'atencao' | 'impeditivo'
+  resumo?: string
+  conferido_em?: string
+  matricula_arquivo?: string | null
+}
 export const TIPOS_DOC_INSTRUCAO: { v: TipoDocInstrucao; label: string }[] = [
   { v: 'rg', label: 'RG (identidade)' },
   { v: 'cnh', label: 'CNH (habilitação)' },
@@ -19,6 +32,7 @@ export interface Documento {
   id: string; solicitacao_id: string; tipo: TipoDocInstrucao
   nome_arquivo: string; storage_path: string; mime: string | null
   extraido: Record<string, any> | null; status: 'pendente' | 'extraido' | 'validado'
+  confronto?: Confronto | null
   created_at: string
 }
 
@@ -47,6 +61,20 @@ export async function extrairDocumento(documentoId: string): Promise<Record<stri
   const msg = await mensagemErroFuncao(error, data, 'artemis-extract')
   if (msg) throw new Error(msg)
   return (data as any).extraido as Record<string, any>
+}
+
+/**
+ * Confronta o contrato lido com a matrícula do imóvel deste protocolo.
+ * Usa as duas leituras já gravadas — não relê os arquivos, para não divergir
+ * do que o escrevente validou na tela.
+ */
+export async function confrontarComMatricula(documentoId: string): Promise<Confronto> {
+  const { data, error } = await supabase.functions.invoke('artemis-extract', {
+    body: { documentoId, acao: 'confrontar' },
+  })
+  const msg = await mensagemErroFuncao(error, data, 'artemis-extract')
+  if (msg) throw new Error(msg)
+  return (data as any).confronto as Confronto
 }
 
 export async function marcarValidado(documentoId: string): Promise<void> {

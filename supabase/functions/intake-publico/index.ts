@@ -155,10 +155,19 @@ Deno.serve(async (req) => {
       const ditoPeloCliente = [...messages.filter((m) => m.role === "user").map((m) => m.content)].join(" ");
       const alvo = detectarUnidade(ditoPeloCliente, empr);
 
+      // Documentos: a lista vem da base, nunca do que a pessoa afirma ter enviado.
+      // Sem isso a Artemis confirmava recebimento de anexo que nunca subiu.
+      const { data: docsRecebidos } = await admin.from("documentos")
+        .select("tipo, nome_arquivo")
+        .eq("solicitacao_id", acesso.solicitacao_id)
+        .not("recebido_em", "is", null)   // reservado != recebido
+        .order("created_at", { ascending: true });
+
       const system = promptAtendimento(canal, {
         tipoAtoNome: body.tipoAtoNome, empreendimentos: empr,
         trilha: body.trilha === "documentos" ? "documentos" : "conversa",
         campos: { nome: camposTela.nome, telefone: camposTela.telefone, email: camposTela.email },
+        documentos: ((docsRecebidos as any[]) ?? []).map((d) => ({ tipo: d.tipo, nome: d.nome_arquivo })),
         empreendimentoConfirmado: alvo?.nome ?? null,
       });
       let alertaUnidade: Record<string, unknown> | null = null;
@@ -246,11 +255,37 @@ Deno.serve(async (req) => {
       const path = `${acesso.solicitacao_id}/${crypto.randomUUID()}_${safe}`;
       const { data: signed, error: e1 } = await admin.storage.from("documentos").createSignedUploadUrl(path);
       if (e1) throw e1;
-      const { error: e2 } = await admin.from("documentos").insert({
+      const { data: dado, error: e2 } = await admin.from("documentos").insert({
         solicitacao_id: acesso.solicitacao_id, tipo: tipoDoc, nome_arquivo: nome, storage_path: path, mime: body.mime ?? null,
-      });
+      }).select("id").single();
       if (e2) throw e2;
-      return json({ path, token: signed.token });
+      return json({ path, token: signed.token, documento_id: (dado as any)?.id ?? null });
+    }
+
+    // ---- confirmar recebimento: só aqui o documento passa a existir de fato ----
+    // O cliente chama isto DEPOIS do upload. Conferimos o objeto no storage em
+    // vez de acreditar na palavra do cliente: se o upload falhou no meio, a
+    // linha continua sem `recebido_em` e a Artemis segue tratando como não
+    // recebido.
+    if (action === "upload-ok") {
+      const path = String(body.path ?? "");
+      if (!path.startsWith(`${acesso.solicitacao_id}/`)) return json({ error: "Caminho inválido." }, 400);
+
+      const barra = path.lastIndexOf("/");
+      const { data: lista } = await admin.storage.from("documentos")
+        .list(path.slice(0, barra), { search: path.slice(barra + 1), limit: 1 });
+      const obj = (lista ?? [])[0];
+      const tamanho = (obj as any)?.metadata?.size ?? 0;
+      if (!obj || tamanho <= 0) return json({ recebido: false, error: "Arquivo não chegou ao servidor." }, 409);
+
+      await admin.from("documentos")
+        .update({ recebido_em: new Date().toISOString(), tamanho })
+        .eq("solicitacao_id", acesso.solicitacao_id).eq("storage_path", path);
+
+      const { data: todos } = await admin.from("documentos")
+        .select("tipo, nome_arquivo").eq("solicitacao_id", acesso.solicitacao_id)
+        .not("recebido_em", "is", null).order("created_at", { ascending: true });
+      return json({ recebido: true, documentos: todos ?? [] });
     }
 
     // ---- finalizar: compila a demanda e coloca no painel ----

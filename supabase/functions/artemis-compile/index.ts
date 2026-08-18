@@ -21,6 +21,7 @@ import {
 } from "../_shared/artemis.ts";
 import { criarCofre, type Entidade } from "../_shared/tokenizer.ts";
 import { clausulasMatricula, analisarMatricula } from "../_shared/matricula.ts";
+import { espelharModelo, dicionarioDoAto } from "../_shared/espelho.ts";
 
 const ESQUEMA_ELABORACAO = `Responda SOMENTE com um objeto JSON válido (sem texto fora do JSON, sem cercas de código), no formato:
 {
@@ -78,6 +79,8 @@ Deno.serve(async (req) => {
     let blocoModelo = "";
     let blocoClausulas = "";
     let modeloFonte: string | null = null;
+    let modeloTexto = "";
+    let modeloTitulo = "";
     if (body.solicitacaoId) {
       const admin2 = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
@@ -85,6 +88,8 @@ Deno.serve(async (req) => {
       const m = ((mod as any[]) ?? [])[0];
       if (m?.texto) {
         modeloFonte = m.fonte;
+        modeloTexto = String(m.texto);
+        modeloTitulo = String(m.titulo ?? "");
         blocoModelo = `
 
 MODELO PADRÃO A SEGUIR (fonte: ${m.fonte === "empreendimento" ? "modelo do empreendimento" : m.fonte === "construtora" ? "modelo da construtora" : "modelo padrão do acervo"} — "${m.titulo}"):
@@ -161,7 +166,63 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
     const solicitacaoId = body.solicitacaoId;
     if (!solicitacaoId) return json({ error: "solicitacaoId é obrigatório no modo ELABORACAO." }, 400);
 
-    const conteudo: string = result.minuta_markdown ?? "";
+    // ---------------------------------------------------------------------
+    // ESPELHO DO MODELO
+    //
+    // Havendo modelo do empreendimento ou da construtora, a minuta é o modelo
+    // reproduzido com os campos preenchidos — não uma redação nova. A saída do
+    // modelo de linguagem passa a servir só para o parecer (`qualificacao`),
+    // que é onde ele agrega: apontar o que falta e o que merece atenção.
+    //
+    // A construtora aprovou aquela redação. Qualquer paráfrase, por melhor que
+    // seja, é um texto que ninguém aprovou.
+    // ---------------------------------------------------------------------
+    let conteudo: string = result.minuta_markdown ?? "";
+    let origemTexto = "ia";
+    let pendencias: { rotulo: string; ocorrencias: number }[] = [];
+
+    if (modeloTexto.trim()) {
+      const [{ data: partesEsp }, { data: solEsp }] = await Promise.all([
+        supabase.from("partes").select("papel, nome, cpf_cnpj, dados").eq("solicitacao_id", solicitacaoId).order("ordem"),
+        supabase.from("solicitacoes").select("*, empreendimentos(nome, construtora_id), cartorios(nome, cidade)")
+          .eq("id", solicitacaoId).maybeSingle(),
+      ]);
+
+      const { data: docsAto } = await supabase.from("documentos")
+        .select("tipo, extraido, status").eq("solicitacao_id", solicitacaoId);
+      const pega = (t: string) => ((docsAto as any[]) ?? [])
+        .filter((d) => d.tipo === t && d.extraido)
+        .sort((a, b) => (a.status === "validado" ? -1 : 1))[0]?.extraido ?? null;
+
+      const sol = solEsp as any;
+      const dic = dicionarioDoAto({
+        solicitacao: sol,
+        partes: (partesEsp as any[]) ?? [],
+        imovel: pega("matricula") ?? sol?.dados,
+        contrato: pega("compromisso"),
+        empreendimento: sol?.empreendimentos,
+        cartorio: sol?.cartorios,
+      });
+
+      const esp = espelharModelo(modeloTexto, dic);
+      conteudo = esp.texto;
+      origemTexto = "espelho_modelo";
+      pendencias = esp.pendentes;
+
+      // As pendências entram no parecer: o escrevente vê no mesmo lugar em que
+      // já lê as demais ressalvas, em vez de precisar caçar colchetes no texto.
+      if (esp.pendentes.length) {
+        result.qualificacao = [
+          ...(result.qualificacao ?? []),
+          ...esp.pendentes.map((p) => ({
+            item: `Campo do modelo não encontrado: ${p.rotulo}`,
+            status: "pendente",
+            fundamento: `Marcado no texto como [[**${p.rotulo}**]]${p.ocorrencias > 1 ? ` (${p.ocorrencias} ocorrências)` : ""}. Preencha antes de gerar o PDF final.`,
+          })),
+        ];
+      }
+    }
+
     const hash = await sha256(conteudo);
     const qualificacao = Array.isArray(result.qualificacao) ? result.qualificacao : [];
 
@@ -173,7 +234,8 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
 
     const { data: minuta, error: errM } = await supabase
       .from("minutas")
-      .insert({ solicitacao_id: solicitacaoId, versao, tipo: tipoMinuta, conteudo, hash, qualificacao })
+      .insert({ solicitacao_id: solicitacaoId, versao, tipo: tipoMinuta, conteudo, hash, qualificacao,
+                origem: origemTexto, modelo_fonte: modeloFonte, pendencias })
       .select("*").single();
     if (errM) throw new Error("Falha ao gravar minuta: " + errM.message);
 
@@ -196,6 +258,9 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
     return json({
       mode, minuta, qualificacao,
       modelo_fonte: modeloFonte,     // de onde veio a base da minuta
+      modelo_titulo: modeloTitulo,
+      origem: origemTexto,           // espelho_modelo | ia
+      pendencias,                    // campos do modelo não encontrados
       partes: result.partes ?? [],
       metadados: result.metadados ?? {},
       placeholders_pendentes: result.placeholders_pendentes ?? [],

@@ -11,6 +11,34 @@ export interface Fatura {
   valor_fixo: number; valor_variavel: number; valor_total: number
   status: 'aberta' | 'fechada' | 'paga'; detalhes: any; gerada_em: string; paga_em: string | null
 }
+/** Uma linha do demonstrativo: quantidade medida x preço da tabela. */
+export interface LinhaCobranca {
+  item: string; rotulo: string; quantidade: number
+  valor_unitario: number; valor_total: number
+}
+export interface Demonstrativo {
+  competencia: string
+  valor_fixo: number
+  linhas: LinhaCobranca[]
+  valor_variavel: number
+  valor_total: number
+  /** Itens com uso no mês e preço zerado — cobrança que ficaria de fora. */
+  sem_preco: string[]
+}
+export interface Preco {
+  id: string; cartorio_id: string | null; item: string
+  valor_unitario: number; ativo: boolean; atualizado_em: string
+}
+
+export const ITEM_ROTULO: Record<string, string> = {
+  ato_aberto: 'Atos abertos (protocolos)',
+  leitura_documento: 'Leituras de documento por IA',
+  minuta_ia: 'Minutas geradas por IA (por versão)',
+  triagem_ia: 'Triagens por IA',
+  consulta_juridica: 'Consultas jurídicas',
+  prequalificacao: 'Avaliações de aptidão registral',
+}
+
 export interface CartorioAdmin {
   id: string; nome: string; comarca: string | null; uf: string | null
   plano: Plano | null; ultima_fatura: Fatura | null
@@ -90,3 +118,38 @@ export async function usoDoMes(cartorioId: string, competencia: string): Promise
     atos: lista.map(a => ({ protocolo: a.protocolo, titulo: a.titulo, tipo: a.tipos_ato?.nome ?? null, concluida_em: a.concluida_em })),
   }
 }
+
+
+// ---------------------------------------------------------------------------
+// Demonstrativo por evento
+//
+// O cálculo mora no banco (demonstrativo_faturamento). O front só exibe: assim
+// a prévia na tela do cartório, a fatura fechada e a conferência do admin usam
+// exatamente a mesma regra, sem risco de divergirem.
+// ---------------------------------------------------------------------------
+export async function demonstrativo(cartorioId: string, competencia: string): Promise<Demonstrativo> {
+  const { data, error } = await supabase.rpc('demonstrativo_faturamento', {
+    p_cartorio: cartorioId, p_competencia: competencia,
+  })
+  if (error) throw error
+  return data as Demonstrativo
+}
+
+/** Nível 4 (administração) do cartório, ou admin da plataforma. */
+export async function podeVerFaturamento(cartorioId: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('pode_ver_faturamento', { p_cartorio: cartorioId })
+  if (error) return false
+  return Boolean(data)
+}
+
+/** Tabela de preços: a do cartório quando existir, senão a padrão da plataforma. */
+export async function listarPrecos(cartorioId?: string | null): Promise<Preco[]> {
+  let q = supabase.from('precos').select('*').order('item')
+  q = cartorioId ? q.or(`cartorio_id.is.null,cartorio_id.eq.${cartorioId}`) : q.is('cartorio_id', null)
+  const { data, error } = await q
+  if (error) throw error
+  return (data as Preco[]) ?? []
+}
+
+export const adminSalvarPreco = (item: string, valorUnitario: number, cartorioId?: string | null) =>
+  adminCall('salvar_preco', { item, valorUnitario, cartorioId: cartorioId ?? null })

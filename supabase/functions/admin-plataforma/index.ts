@@ -6,6 +6,7 @@
 //   "usuario_master"  { cartorioId, email, senha, nome }  (cria/reseta o login master)
 //   "gerar_fatura"    { cartorioId, competencia:"AAAA-MM" }
 //   "extrato"         { cartorioId, competencia }
+//   "salvar_preco"    { item, valorUnitario, cartorioId|null }
 //   "marcar_paga"     { faturaId }
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
@@ -112,19 +113,53 @@ Deno.serve(async (req) => {
       const { data: plano } = await admin.from("planos").select("*").eq("cartorio_id", cartorioId).maybeSingle();
       if (!plano) return json({ error: "Cadastre o plano do cartório antes de gerar a fatura." }, 400);
 
-      const qtd = extrato.length;
-      const vFixo = Number((plano as any).valor_fixo ?? 0);
-      const vVar = Number(((qtd * Number((plano as any).valor_ato ?? 0))).toFixed(2));
-      const total = Number((vFixo + vVar).toFixed(2));
+      // A conta vem da mesma função que a tela do cartório usa na prévia.
+      // Duplicar a fórmula aqui era o caminho curto para a fatura fechada
+      // discordar do que o cartório viu o mês inteiro.
+      const { data: dem, error: eDem } = await admin.rpc("demonstrativo_faturamento", {
+        p_cartorio: cartorioId, p_competencia: body.competencia,
+      });
+      if (eDem) throw eDem;
+      const d = dem as any;
+
+      const linhas = (d?.linhas ?? []) as any[];
+      const qtd = Number(linhas.find((l) => l.item === "ato_aberto")?.quantidade ?? 0);
+      const vFixo = Number(d?.valor_fixo ?? 0);
+      const vVar = Number(Number(d?.valor_variavel ?? 0).toFixed(2));
+      const total = Number(Number(d?.valor_total ?? 0).toFixed(2));
 
       const { data: fat, error: eFat } = await admin.from("faturas").upsert({
         cartorio_id: cartorioId, competencia: body.competencia,
         qtd_atos: qtd, valor_fixo: vFixo, valor_variavel: vVar, valor_total: total,
-        status: "fechada", detalhes: { atos: extrato, valor_ato: (plano as any).valor_ato },
+        status: "fechada",
+        detalhes: { linhas, sem_preco: d?.sem_preco ?? [], atos_concluidos: extrato },
         gerada_em: new Date().toISOString(),
       }, { onConflict: "cartorio_id,competencia" }).select("*").single();
       if (eFat) throw eFat;
-      return json({ ok: true, fatura: fat });
+      return json({ ok: true, fatura: fat, demonstrativo: d });
+    }
+
+    if (action === "salvar_preco") {
+      const item = String(body.item ?? "");
+      const validos = ["ato_aberto", "leitura_documento", "minuta_ia", "triagem_ia", "consulta_juridica", "prequalificacao"];
+      if (!validos.includes(item)) return json({ error: "Item de cobrança desconhecido." }, 400);
+
+      const alvo = body.cartorioId ?? null;
+      const { data: existente } = await admin.from("precos").select("id")
+        .eq("item", item)
+        .filter("cartorio_id", alvo ? "eq" : "is", alvo ?? null)
+        .maybeSingle();
+
+      const row = {
+        cartorio_id: alvo, item,
+        valor_unitario: Number(body.valorUnitario ?? 0),
+        ativo: true, atualizado_em: new Date().toISOString(),
+      };
+      const { error } = existente
+        ? await admin.from("precos").update(row).eq("id", (existente as any).id)
+        : await admin.from("precos").insert(row);
+      if (error) throw error;
+      return json({ ok: true });
     }
 
     if (action === "marcar_paga") {

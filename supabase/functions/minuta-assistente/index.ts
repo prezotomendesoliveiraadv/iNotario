@@ -13,9 +13,11 @@ import { corsHeaders, json } from "../_shared/cors.ts";
 import { respostaErro } from "../_shared/erros.ts";
 import { callModel, callModelJson, sha256, PROVEDOR_ATIVO, MODELO_ATIVO } from "../_shared/artemis.ts";
 
+import { espelharModelo, dicionarioDoAto } from "../_shared/espelho.ts";
+
 async function contexto(admin: any, solicitacaoId: string) {
   const { data: sol } = await admin.from("solicitacoes")
-    .select("id, cartorio_id, protocolo, titulo, dados, complexidade, unidade, empreendimento_id, tipos_ato(nome, slug, template)")
+    .select("id, cartorio_id, protocolo, titulo, dados, complexidade, unidade, empreendimento_id, tipos_ato(nome, slug, template), empreendimentos(nome), cartorios(nome, cidade)")
     .eq("id", solicitacaoId).maybeSingle();
   if (!sol) return null;
 
@@ -57,7 +59,13 @@ ${mat ? JSON.stringify(mat).slice(0, 1500) : "(não lida)"}`;
     ? `\n\nCLÁUSULAS ESPECIAIS A INCORPORAR (na ordem):\n${(cls as any[]).map((c, i) => `[${i + 1}] ${c.nome}\n${c.texto}`).join("\n\n")}`
     : "";
 
-  return { sol: s, bloco, blocoModelo, blocoClausulas, minuta, modeloFonte: m?.fonte ?? null };
+  return {
+    sol: s, bloco, blocoModelo, blocoClausulas, minuta,
+    modeloFonte: m?.fonte ?? null,
+    modeloTexto: String(m?.texto ?? ""),
+    partes: (partes as any[]) ?? [],
+    docs: (docs as any[]) ?? [],
+  };
 }
 
 Deno.serve(async (req) => {
@@ -110,7 +118,33 @@ Responda APENAS com JSON:
 
       const entrada = `${ctx.bloco}${ctx.blocoModelo}${ctx.blocoClausulas}\n\nRedija a minuta agora.`;
       const r = await callModelJson(system, [{ role: "user", content: entrada }], 4000);
-      const texto = String(r.minuta ?? "").trim();
+
+      // Havendo modelo do empreendimento ou da construtora, o texto é o modelo
+      // espelhado — a IA fica com os alertas. Mesma regra do artemis-compile:
+      // a redação aprovada pela construtora não é reescrita.
+      let texto = String(r.minuta ?? "").trim();
+      let origemTexto = "ia";
+      let pendencias: { rotulo: string; ocorrencias: number }[] = [];
+
+      if (ctx.modeloTexto.trim()) {
+        const pega = (t: string) => ctx.docs.filter((d: any) => d.tipo === t && d.extraido)[0]?.extraido ?? null;
+        const esp = espelharModelo(ctx.modeloTexto, dicionarioDoAto({
+          solicitacao: ctx.sol,
+          partes: ctx.partes,
+          imovel: pega("matricula") ?? ctx.sol?.dados,
+          contrato: pega("compromisso"),
+          empreendimento: ctx.sol?.empreendimentos,
+          cartorio: ctx.sol?.cartorios,
+        }));
+        texto = esp.texto;
+        origemTexto = "espelho_modelo";
+        pendencias = esp.pendentes;
+        r.placeholders = [
+          ...(Array.isArray(r.placeholders) ? r.placeholders : []),
+          ...esp.pendentes.map((x) => x.rotulo),
+        ];
+      }
+
       if (!texto) return json({ error: "A IA não retornou a minuta. Tente novamente." }, 502);
 
       const versao = ((ctx.minuta as any)?.versao ?? 0) + 1;
@@ -118,6 +152,7 @@ Responda APENAS com JSON:
       const { data: nova } = await admin.from("minutas").insert({
         solicitacao_id: solicitacaoId, versao, tipo: "provisoria",
         conteudo: texto, hash, qualificacao: r.alertas ?? [], criado_por: uid,
+        origem: origemTexto, modelo_fonte: ctx.modeloFonte, pendencias,
       }).select("id, versao").maybeSingle();
 
       await admin.rpc("registrar_custodia", {
@@ -129,7 +164,8 @@ Responda APENAS com JSON:
       return json({
         ok: true, versao: (nova as any)?.versao ?? versao, minuta: texto,
         alertas: r.alertas ?? [], placeholders: r.placeholders ?? [],
-        modelo_fonte: ctx.modeloFonte, provedor: PROVEDOR_ATIVO, modelo: MODELO_ATIVO,
+        modelo_fonte: ctx.modeloFonte, origem: origemTexto, pendencias,
+        provedor: PROVEDOR_ATIVO, modelo: MODELO_ATIVO,
       });
     }
 

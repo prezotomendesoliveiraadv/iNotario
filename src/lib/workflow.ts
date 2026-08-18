@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { sha256 } from './minutaEngine'
 import { mensagemErroFuncao } from './erros'
 
 // ---------- papéis, etapas e competência (espelha _shared/workflow.ts) ----------
@@ -102,9 +103,50 @@ export async function ultimaMinuta(solicitacaoId: string): Promise<{ id: string;
     .eq('solicitacao_id', solicitacaoId).order('versao', { ascending: false }).limit(1).maybeSingle()
   return (data as any) ?? null
 }
-export async function salvarMinuta(minutaId: string, conteudo: string, solicitacaoId: string) {
-  await supabase.from('minutas').update({ conteudo }).eq('id', minutaId)
-  await supabase.rpc('registrar_custodia', { p_solicitacao: solicitacaoId, p_minuta: minutaId, p_acao: 'minuta_editada', p_detalhe: {} })
+/**
+ * Salva a edição manual como uma NOVA VERSÃO da minuta.
+ *
+ * Não é update: `minutas` não tem policy de UPDATE (só select e insert), então
+ * um update era descartado pelo RLS sem erro — a tela dizia "salva" e nada era
+ * gravado. Versionar também é o comportamento correto: a cadeia de custódia
+ * encadeia hashes, e sobrescrever conteúdo quebraria a rastreabilidade de quem
+ * mudou o quê.
+ */
+export async function salvarMinuta(
+  solicitacaoId: string,
+  conteudo: string,
+  opts: { tipo?: string; qualificacao?: any } = {},
+): Promise<{ versao: number; id: string }> {
+  const texto = (conteudo ?? '').trim()
+  if (!texto) throw new Error('A minuta está vazia — nada a salvar.')
+
+  const { data: ultima, error: eSel } = await supabase.from('minutas')
+    .select('id, versao, conteudo, tipo, qualificacao')
+    .eq('solicitacao_id', solicitacaoId).order('versao', { ascending: false }).limit(1).maybeSingle()
+  if (eSel) throw eSel
+
+  if (ultima && (ultima as any).conteudo === texto) {
+    throw new Error('Nenhuma alteração a salvar — o texto está igual ao da versão atual.')
+  }
+
+  const hash = await sha256(texto)
+  const versao = ((ultima as any)?.versao ?? 0) + 1
+  const { data, error } = await supabase.from('minutas').insert({
+    solicitacao_id: solicitacaoId,
+    versao,
+    tipo: opts.tipo ?? (ultima as any)?.tipo ?? 'provisoria',
+    conteudo: texto,
+    hash,
+    qualificacao: opts.qualificacao ?? (ultima as any)?.qualificacao ?? [],
+  }).select('id, versao').single()
+  // O erro precisa subir: silenciá-lo foi exatamente o que escondeu o bug.
+  if (error) throw error
+
+  await supabase.rpc('registrar_custodia', {
+    p_solicitacao: solicitacaoId, p_minuta: (data as any).id,
+    p_acao: 'minuta_editada', p_detalhe: { versao, origem: 'edicao_manual' },
+  })
+  return { versao: (data as any).versao, id: (data as any).id }
 }
 
 // ---------- geração de documentos ----------

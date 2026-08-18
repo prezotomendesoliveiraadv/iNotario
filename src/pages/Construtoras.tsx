@@ -9,9 +9,13 @@ import {
 import {
   listarConstrutoras, salvarConstrutora, listarRepresentantes, salvarRepresentante, removerRepresentante,
   listarCertidoes, salvarCertidao, removerCertidao, listarEmpreendimentos, salvarEmpreendimento,
+  lerContratoSocial, importarRepresentantes,
   JANELA_ALERTA_DIAS,
   type Construtora, type Representante, type Certidao, type Empreendimento,
+  type LeituraContratoSocial,
 } from '../lib/incorporacao'
+import { mascaraCnpj, erroCnpj } from '../lib/cnpj'
+import ContratoSocialCard from '../components/ContratoSocialCard'
 
 const vazioRep = (): Partial<Representante> => ({
   nome: '', cpf: '', rg: '', nacionalidade: 'brasileiro(a)', estado_civil: '', profissao: '',
@@ -62,6 +66,8 @@ export default function Construtoras() {
 
   async function salvar() {
     if (!form.razao_social?.trim()) { setErro('Informe a razão social.'); return }
+    const eCnpj = erroCnpj(form.cnpj ?? '')
+    if (eCnpj) { setErro(eCnpj); return }
     setBusy(true); setErro(null)
     try {
       const c = await salvarConstrutora(form)
@@ -144,7 +150,13 @@ export default function Construtoras() {
           <div><label className="label">Nome fantasia</label>
             <input className="input" value={form.nome_fantasia ?? ''} onChange={e => setForm(f => ({ ...f, nome_fantasia: e.target.value }))} /></div>
           <div><label className="label">CNPJ</label>
-            <input className="input" value={form.cnpj ?? ''} onChange={e => setForm(f => ({ ...f, cnpj: e.target.value }))} /></div>
+            <input className="input" inputMode="numeric" placeholder="00.000.000/0000-00" maxLength={18}
+              value={form.cnpj ?? ''}
+              onChange={e => setForm(f => ({ ...f, cnpj: mascaraCnpj(e.target.value) }))} />
+            {erroCnpj(form.cnpj ?? '') && (
+              <div className="text-[11px] text-red-600 mt-1">{erroCnpj(form.cnpj ?? '')}</div>
+            )}
+          </div>
           <div><label className="label">Endereço</label>
             <input className="input" value={form.endereco ?? ''} onChange={e => setForm(f => ({ ...f, endereco: e.target.value }))} /></div>
         </div>
@@ -181,6 +193,10 @@ export default function Construtoras() {
 
       {!sel ? null : (
         <>
+          {/* leitura do contrato social: vem ANTES da lista manual porque é
+              ela que define quem pode assinar e como */}
+          <ContratoSocialCard construtora={sel} onImportado={() => abrir(sel)} />
+
           {/* representantes */}
           <div className="card p-5 mb-4">
             <div className="flex items-center justify-between">

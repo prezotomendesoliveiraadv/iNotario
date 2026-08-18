@@ -12,3 +12,7 @@ supabase db query --linked --file supabase/construtora_portal.sql
 supabase db query --linked --file supabase/admin_tarefas.sql
 supabase db query --linked --file supabase/agendamentos.sql
 supabase db query --linked --file supabase/data_cartorio.sql
+supabase db query --linked --file supabase/documentos_recebidos.sql  
+
+supabase db query --db-url "postgresql://postgres:rNGHtfyWhDlFuBV8@db.yvwzpxasfexqctjsbyti.supabase.co:5432/postgres" --file supabase/schema.sql
+supabase db query --db-url "postgresql://postgres:rNGHtfyWhDlFuBV8@db.yvwzpxasfexqctjsbyti.supabase.co:5432/postgres" --file supabase/construtora_portal.sql

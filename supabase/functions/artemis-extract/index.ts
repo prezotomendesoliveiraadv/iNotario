@@ -6,7 +6,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { respostaErro } from "../_shared/erros.ts";
-import { callModelVision, PROVEDOR_ATIVO, MODELO_ATIVO } from "../_shared/artemis.ts";
+import { callModel, callModelVision, PROVEDOR_ATIVO, MODELO_ATIVO } from "../_shared/artemis.ts";
 
 const SYSTEM = `Você é Artemis, especialista em qualificação notarial. Leia o documento fornecido e extraia EXATAMENTE os dados solicitados. Não invente: se um campo estiver ilegível ou ausente, retorne string vazia. Não normalize além do necessário. Responda SOMENTE com JSON válido, sem texto fora do JSON e sem cercas de código.`;
 
@@ -39,7 +39,7 @@ preencha "prazo_dias" e calcule "validade" a partir da emissão. Se a validade n
 Regras: datas em AAAA-MM-DD. "poderes_para_alienar" só true se houver poderes EXPRESSOS para vender/alienar/dar quitação.
 Se o instrumento não indicar prazo, deixe "validade" vazia e descreva em "prazo" (ex.: "sem prazo determinado"). Não invente.`;
   }
-  if (tipo === "compromisso") {
+  if (tipo === "compromisso" || tipo === "contrato") {
     return `Compromisso/contrato particular de compra e venda de imóvel. Extraia e responda SOMENTE com:
 { "vendedores":[ {"nome":"","cpf_cnpj":"","estado_civil":"","regime_bens":"","profissao":"","endereco":""} ],
   "compradores":[ {"nome":"","cpf_cnpj":"","estado_civil":"","regime_bens":"","profissao":"","endereco":""} ],
@@ -47,9 +47,14 @@ Se o instrumento não indicar prazo, deixe "validade" vazia e descreva em "prazo
   "imovel_descricao":"", "imovel_matricula":"", "imovel_cartorio_ri":"",
   "valor_total":"", "forma_pagamento":"", "sinal":"", "saldo":"",
   "financiamento": false, "instituicao_financeira":"",
-  "data_contrato":"AAAA-MM-DD", "prazo_entrega":"", "clausulas_relevantes":[""] }
-Regras: liste TODAS as partes de cada polo. Valores como aparecem no contrato. Em "clausulas_relevantes",
-registre cláusulas com efeito notarial (retrovenda, reversão, condição resolutiva, arras, alienação fiduciária).
+  "data_contrato":"AAAA-MM-DD", "prazo_entrega":"",
+  "clausulas_relevantes":[ {"tema":"", "resumo":"", "trecho":""} ] }
+Regras: liste TODAS as partes de cada polo, com a qualificação completa que o contrato trouxer.
+Valores exatamente como aparecem no contrato (não converta, não arredonde).
+Em "clausulas_relevantes", registre cada cláusula com efeito notarial ou registral, uma por entrada, usando
+em "tema" um destes rótulos quando couber: alienação fiduciária, garantia hipotecária, rescisão, retenção,
+direito de arrependimento, arras/sinal, condição resolutiva, retrovenda, reversão, cessão, multa, tolerância
+de entrega, correção monetária. "resumo" em uma frase; "trecho" com a passagem literal (máx. 300 caracteres).
 Não invente dados ausentes: use "" ou lista vazia.`;
   }
   return `Extraia os dados relevantes do documento e responda SOMENTE com um objeto JSON de pares campo/valor.`;
@@ -73,8 +78,12 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return json({ error: "Método não permitido" }, 405);
 
   try {
-    const { documentoId } = await req.json();
-    if (!documentoId) return json({ error: "documentoId é obrigatório" }, 400);
+    const body = await req.json();
+    const { documentoId } = body;
+    const acao = String(body.acao ?? "extrair");
+    if (acao !== "contrato_social" && !documentoId) {
+      return json({ error: "documentoId é obrigatório" }, 400);
+    }
 
     const authHeader = req.headers.get("Authorization") ?? "";
     const userClient = createClient(
@@ -85,10 +94,143 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
+    // ---- contrato social da construtora: representantes e poderes ----
+    // Lê o arquivo do cadastro (bucket `construtoras`), não da tabela
+    // `documentos`: o contrato social é do cadastro da empresa e vale para
+    // todos os atos dela — não pertence a um protocolo.
+    if (acao === "contrato_social") {
+      const construtoraId = String(body.construtoraId ?? "");
+      if (!construtoraId) return json({ error: "construtoraId é obrigatório." }, 400);
+
+      const { data: emp, error: eEmp } = await userClient
+        .from("construtoras").select("*").eq("id", construtoraId).maybeSingle();
+      if (eEmp || !emp) return json({ error: "Construtora não encontrada ou sem acesso." }, 404);
+
+      const c = emp as any;
+      const ESQUEMA = `{ "representantes":[ {"nome":"","cpf":"","rg":"","nacionalidade":"","estado_civil":"",
+      "profissao":"","endereco":"","cargo":"","poderes_forma":"isolada|conjunta|conjunta_com_outro",
+      "restricoes":""} ],
+  "poderes": {"forma":"", "quorum":"", "limite_valor":"", "restricoes":[""],
+              "exige_anuencia":false, "observacao":""},
+  "empresa": {"razao_social":"","cnpj":"","nire":"","data_arquivamento":"","junta":""},
+  "alteracao_mais_recente":"", "fonte":"", "confianca":"alta|media|baixa" }`;
+
+      const REGRAS = `Extraia APENAS o que o documento disser. Regras:
+- "poderes_forma": "isolada" quando o representante pode assinar sozinho; "conjunta" quando a cláusula exige
+  assinatura de dois ou mais; "conjunta_com_outro" quando exige assinatura em conjunto com pessoa determinada.
+- Em "restricoes", registre limitações reais: alienação de imóveis exigindo aprovação, teto de valor,
+  vedação de garantias, necessidade de anuência de sócio ou de assembleia.
+- "quorum" só quando o texto disser expressamente (ex.: "dois diretores em conjunto").
+- Se o documento for uma alteração contratual, considere a redação vigente e informe em
+  "alteracao_mais_recente" a identificação dela.
+- Nunca invente CPF, cargo ou poder. Campo sem informação vai vazio.
+- "confianca": "baixa" quando o documento estiver ilegível, truncado ou for consolidação parcial.`;
+
+      let bruto: string;
+      let fonte: string;
+
+      if (c.contrato_social_path) {
+        const { data: blobCs, error: eCs } = await admin.storage.from("construtoras").download(c.contrato_social_path);
+        if (eCs || !blobCs) return json({ error: "Falha ao ler o contrato social no storage." }, 500);
+        const bytesCs = new Uint8Array(await blobCs.arrayBuffer());
+        fonte = "contrato_social";
+        bruto = await callModelVision(
+          SYSTEM,
+          `Contrato social (ou alteração consolidada) de uma sociedade. ${REGRAS}\n\nResponda SOMENTE com:\n${ESQUEMA}`,
+          [{ mime: blobCs.type || "application/pdf", data: bytesToBase64(bytesCs) }], 2000,
+        );
+      } else if (String(c.modelo_escritura ?? "").trim()) {
+        // Sem contrato social, o modelo de escritura costuma trazer a
+        // qualificação da vendedora e de quem assina por ela. É fonte
+        // secundária e sai marcada como tal — quem confere precisa saber.
+        fonte = "modelo_escritura";
+        bruto = await callModel(SYSTEM, [{ role: "user", content:
+          `Do MODELO DE ESCRITURA abaixo, extraia a qualificação da vendedora e de quem assina por ela.
+Este é um modelo: onde houver campo entre colchetes, o dado não existe — deixe vazio, não copie o rótulo.
+${REGRAS}
+
+MODELO:
+"""
+${String(c.modelo_escritura).slice(0, 12000)}
+"""
+
+Responda SOMENTE com:
+${ESQUEMA}` }], 2000, { json: true });
+      } else {
+        return json({ error: "Anexe o contrato social ou preencha o modelo de escritura antes de mandar a IA ler." }, 400);
+      }
+
+      let lido: any;
+      try { lido = parseJson(bruto); }
+      catch { return json({ error: "Não foi possível interpretar o contrato social." }, 502); }
+
+      lido.fonte = fonte;
+      lido.lido_em = new Date().toISOString();
+      await admin.from("construtoras")
+        .update({ contrato_social_lido: lido, contrato_social_lido_em: lido.lido_em })
+        .eq("id", construtoraId);
+
+      return json({ ok: true, fonte, leitura: lido });
+    }
+
     // valida acesso pelo RLS do usuário
     const { data: doc, error: eDoc } = await userClient
       .from("documentos").select("*").eq("id", documentoId).maybeSingle();
     if (eDoc || !doc) return json({ error: "Documento não encontrado ou sem acesso." }, 404);
+
+    // ---- confrontar: contrato x matrícula, sem reler os arquivos ----
+    // Usa as duas leituras já gravadas. Reler PDF a cada clique custaria caro e,
+    // pior, poderia divergir da leitura que o escrevente validou na tela.
+    if (acao === "confrontar") {
+      const solicitacaoId = (doc as any).solicitacao_id;
+      const contrato = (doc as any).extraido;
+      if (!contrato) return json({ error: "O contrato ainda não foi lido pela IA." }, 400);
+
+      const { data: mats } = await admin.from("documentos")
+        .select("extraido, status, nome_arquivo, created_at")
+        .eq("solicitacao_id", solicitacaoId).eq("tipo", "matricula")
+        .order("created_at", { ascending: false });
+      const mat = ((mats as any[]) ?? []).find((d) => d.status === "validado" && d.extraido)
+        ?? ((mats as any[]) ?? []).find((d) => d.extraido);
+      if (!mat) {
+        return json({ error: "Nenhuma matrícula lida neste protocolo. Anexe a matrícula e mande a IA ler antes de confrontar." }, 409);
+      }
+
+      const instrucaoConf = `Você confronta dois documentos do MESMO imóvel: o contrato de compra e venda e a
+matrícula do Registro de Imóveis. Aponte convergências e divergências com olhar de qualificação notarial.
+
+CONTRATO (leitura):
+${JSON.stringify(contrato).slice(0, 6000)}
+
+MATRÍCULA (leitura):
+${JSON.stringify(mat.extraido).slice(0, 6000)}
+
+Responda SOMENTE com:
+{ "itens":[ {"campo":"", "contrato":"", "matricula":"", "status":"confere|divergente|ausente", "observacao":""} ],
+  "veredito":"apto|atencao|impeditivo", "resumo":"" }
+
+Confronte ao menos: número da matrícula, cartório de registro, descrição/endereço do imóvel, unidade e
+torre/bloco, área, e a TITULARIDADE (quem vende no contrato é quem consta como proprietário na matrícula?).
+Verifique também se há ônus na matrícula (hipoteca, alienação fiduciária, penhora, indisponibilidade) que o
+contrato não mencione — isso é "divergente", não "ausente".
+Use "ausente" quando o dado não existir em um dos documentos, e "divergente" quando existir nos dois e não bater.
+"veredito" é "impeditivo" quando houver divergência de titularidade ou indisponibilidade; "atencao" quando
+houver ônus ou divergência de descrição; "apto" quando nada disso ocorrer. Não invente dados.`;
+
+      const bruto = await callModel(SYSTEM, [{ role: "user", content: instrucaoConf }], 1800, { json: true });
+      let conf: any;
+      try { conf = parseJson(bruto); }
+      catch { return json({ error: "Não foi possível interpretar o confronto." }, 502); }
+
+      conf.conferido_em = new Date().toISOString();
+      conf.matricula_arquivo = mat.nome_arquivo ?? null;
+      await admin.from("documentos").update({ confronto: conf }).eq("id", documentoId);
+      await admin.rpc("registrar_custodia", {
+        p_solicitacao: solicitacaoId, p_minuta: null, p_acao: "documento_extraido",
+        p_detalhe: { tipo: "confronto_contrato_matricula", veredito: conf.veredito, modelo: MODELO_ATIVO },
+      });
+      return json({ ok: true, confronto: conf });
+    }
 
     // baixa o arquivo do storage (service role) e converte para base64
     const { data: blob, error: eDl } = await admin.storage.from("documentos").download((doc as any).storage_path);

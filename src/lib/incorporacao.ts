@@ -2,6 +2,26 @@
 // Construtoras, empreendimentos, cláusulas especiais e controle de vigência.
 
 import { supabase } from './supabase'
+
+/** Leitura por IA do contrato social (ou, na falta dele, do modelo de escritura). */
+export interface RepresentanteLido {
+  nome: string; cpf?: string; rg?: string; nacionalidade?: string
+  estado_civil?: string; profissao?: string; endereco?: string; cargo?: string
+  poderes_forma?: 'isolada' | 'conjunta' | 'conjunta_com_outro' | string
+  restricoes?: string
+}
+export interface LeituraContratoSocial {
+  representantes: RepresentanteLido[]
+  poderes?: {
+    forma?: string; quorum?: string; limite_valor?: string
+    restricoes?: string[]; exige_anuencia?: boolean; observacao?: string
+  }
+  empresa?: { razao_social?: string; cnpj?: string; nire?: string; data_arquivamento?: string; junta?: string }
+  alteracao_mais_recente?: string
+  fonte: 'contrato_social' | 'modelo_escritura'
+  confianca?: 'alta' | 'media' | 'baixa'
+  lido_em?: string
+}
 import { mensagemErroFuncao } from './erros'
 
 // ---------------------------------------------------------------------------
@@ -16,6 +36,8 @@ export interface Construtora {
   endereco: string | null
   contrato_social_path: string | null
   contrato_social_nome: string | null
+  contrato_social_lido?: LeituraContratoSocial | null
+  contrato_social_lido_em?: string | null
   modelo_escritura: string | null
   modelo_acervo_id: string | null
   observacoes: string | null
@@ -93,6 +115,48 @@ export async function salvarConstrutora(c: Partial<Construtora>): Promise<Constr
     .insert({ ...c, cartorio_id: (prof as any)?.cartorio_id }).select('*').single()
   if (error) throw new Error(error.message)
   return data as Construtora
+}
+
+/**
+ * Manda a IA ler o contrato social da construtora. Sem contrato social anexado,
+ * cai no modelo de escritura do cadastro — que é fonte secundária e volta
+ * marcada como tal.
+ */
+export async function lerContratoSocial(construtoraId: string): Promise<{
+  fonte: 'contrato_social' | 'modelo_escritura'; leitura: LeituraContratoSocial
+}> {
+  const { data, error } = await supabase.functions.invoke('artemis-extract', {
+    body: { acao: 'contrato_social', construtoraId },
+  })
+  const msg = await mensagemErroFuncao(error, data, 'artemis-extract')
+  if (msg) throw new Error(msg)
+  return data as any
+}
+
+/** Cria os representantes lidos que ainda não existem (compara por CPF, senão por nome). */
+export async function importarRepresentantes(
+  construtoraId: string, lidos: RepresentanteLido[], fonte: string,
+): Promise<number> {
+  const existentes = await listarRepresentantes(construtoraId)
+  const chave = (n?: string, c?: string) =>
+    (c ?? '').replace(/\D/g, '') || (n ?? '').trim().toLowerCase()
+  const jaTem = new Set(existentes.map(r => chave(r.nome, (r as any).cpf)))
+
+  const novos = lidos.filter(r => r.nome?.trim() && !jaTem.has(chave(r.nome, r.cpf)))
+  if (!novos.length) return 0
+
+  const { error } = await supabase.from('construtora_representantes').insert(
+    novos.map(r => ({
+      construtora_id: construtoraId,
+      nome: r.nome.trim(), cpf: r.cpf || null, rg: r.rg || null,
+      nacionalidade: r.nacionalidade || null, estado_civil: r.estado_civil || null,
+      profissao: r.profissao || null, endereco: r.endereco || null, cargo: r.cargo || null,
+      poderes_forma: r.poderes_forma || null,
+      origem: fonte === 'contrato_social' ? 'contrato_social' : 'modelo_escritura',
+    })),
+  )
+  if (error) throw error
+  return novos.length
 }
 
 export async function listarRepresentantes(construtoraId: string): Promise<Representante[]> {

@@ -1,12 +1,44 @@
+import { useState } from 'react'
 import Marca from './Marca'
+import Modal from '../../components/Modal'
 import FormularioManual from '../../components/FormularioManual'
 import { LGPD_TEXTO } from '../../lib/portal'
 import type { Atendimento } from './useAtendimento'
 
-const DOC_TIPOS = ['rg', 'cnh', 'matricula', 'contrato', 'outro']
+// Os valores têm de bater com os tipos que o artemis-extract reconhece: o
+// portal enviava 'contrato', que caía na instrução genérica do extrator e
+// produzia um JSON solto em vez do resumo do contrato.
+const DOC_TIPOS: { v: string; label: string }[] = [
+  { v: 'rg', label: 'RG' },
+  { v: 'cnh', label: 'CNH' },
+  { v: 'matricula', label: 'Matrícula' },
+  { v: 'compromisso', label: 'Contrato de compra e venda' },
+  { v: 'outro', label: 'Outro' },
+]
 
 const VOZ_LABEL: Record<string, string> = {
   ouvindo: '🎙️ Ouvindo — pode falar', pensando: '… entendendo', falando: '🔊 Artemis falando…', parado: 'Voz pausada',
+}
+
+function Secao({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div style={{ fontSize: '.72rem', letterSpacing: '.06em', textTransform: 'uppercase',
+                    color: 'var(--brass, #9A7B4F)', marginBottom: '.25rem' }}>{titulo}</div>
+      <div style={{ fontSize: '.86rem' }}>{children}</div>
+    </div>
+  )
+}
+
+function Dado({ rotulo, valor, opcional }: { rotulo: string; valor?: string | null; opcional?: boolean }) {
+  return (
+    <div style={{ display: 'flex', gap: '.5rem' }}>
+      <span style={{ color: 'var(--muted, #6B7280)', minWidth: 78, fontSize: '.78rem' }}>{rotulo}</span>
+      <span style={{ color: valor ? 'var(--ink)' : 'var(--muted, #6B7280)', fontWeight: valor ? 600 : 400 }}>
+        {valor || (opcional ? 'não informado' : '—')}
+      </span>
+    </div>
+  )
 }
 
 /** Passo 2 — a conversa em si: chat/voz à esquerda, documentos e LGPD à direita. */
@@ -21,10 +53,17 @@ export default function TelaConversa({ at }: { at: Atendimento }) {
     contato, setContato, contatoConfirmado, setContatoConfirmado,
     emprConfirmado, alertaUnidade,
     docs, tipoDoc, setTipoDoc, enviandoDoc, subirDoc,
-    lgpd, setLgpd, finalizar,
+    lgpd, setLgpd, finalizar, montarResumo,
   } = at
 
+  // A pessoa só vê os campos abertos quando ainda não há nada anotado, ou
+  // quando ela mesma pede para corrigir. Nos demais casos, confere e envia.
+  const [editando, setEditando] = useState(false)
+  const [conferindo, setConferindo] = useState<ReturnType<typeof montarResumo> | null>(null)
+  const temContato = Boolean(contato.nome || contato.whatsapp)
+
   return (
+    <>
     <div style={{ minHeight: '100vh', background: 'var(--paper)' }}>
       <Marca />
       <div style={{ maxWidth: 920, margin: '1rem auto', padding: '0 1rem 3rem' }}>
@@ -75,50 +114,10 @@ export default function TelaConversa({ at }: { at: Atendimento }) {
           ) : null}
 
           {/* Dados de contato — a Artemis preenche, o cliente confirma */}
-          {(contato.nome || contato.whatsapp || emprConfirmado) && (
+          {emprConfirmado && (
             <div style={{ margin: '.75rem 1rem 0', padding: '.7rem .85rem', borderRadius: 12,
-                          background: contatoConfirmado ? '#EAF6EF' : 'var(--paper)',
-                          border: `1px solid ${contatoConfirmado ? '#9BC9AE' : 'var(--line)'}` }}>
-              <div style={{ fontSize: '.68rem', letterSpacing: '.12em', textTransform: 'uppercase',
-                            color: 'var(--brass)', fontWeight: 600, marginBottom: '.35rem' }}>
-                Seus dados
-              </div>
-
-              {emprConfirmado && (
-                <div style={{ fontSize: '.8rem', color: '#1E7A4F', marginBottom: '.4rem' }}>
-                  ✓ Empreendimento <b>{emprConfirmado}</b> localizado no cartório — os dados da construtora já estão conosco.
-                </div>
-              )}
-
-              <div style={{ display: 'grid', gap: '.4rem', gridTemplateColumns: '1fr 1fr' }}>
-                <label style={{ fontSize: '.72rem', color: 'var(--muted, #6B7280)' }}>
-                  Nome
-                  <input className="input" value={contato.nome || ''}
-                    onChange={e => { setContato(c => ({ ...c, nome: e.target.value })); setContatoConfirmado(false) }} />
-                </label>
-                <label style={{ fontSize: '.72rem', color: 'var(--muted, #6B7280)' }}>
-                  WhatsApp
-                  <input className="input" placeholder="(11) 99999-9999" value={contato.whatsapp || ''}
-                    onChange={e => { setContato(c => ({ ...c, whatsapp: e.target.value })); setContatoConfirmado(false) }} />
-                </label>
-              </div>
-
-              {(contato.nome || contato.whatsapp) && (
-                contatoConfirmado ? (
-                  <div style={{ fontSize: '.76rem', color: '#1E7A4F', marginTop: '.4rem' }}>
-                    ✓ Dados confirmados. Se algo mudar, é só editar aqui.
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '.5rem', marginTop: '.45rem', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '.76rem', color: 'var(--ink)' }}>Está certinho?</span>
-                    <button className="btn-primary" style={{ padding: '.25rem .7rem', fontSize: '.78rem' }}
-                      onClick={() => setContatoConfirmado(true)}>Confirmar</button>
-                    <span style={{ fontSize: '.72rem', color: 'var(--muted, #6B7280)' }}>
-                      ou corrija acima
-                    </span>
-                  </div>
-                )
-              )}
+                          background: '#EAF6EF', border: '1px solid #9BC9AE', fontSize: '.8rem', color: '#1E7A4F' }}>
+              ✓ Empreendimento <b>{emprConfirmado}</b> localizado no cartório — os dados da construtora já estão conosco.
             </div>
           )}
 
@@ -169,7 +168,7 @@ export default function TelaConversa({ at }: { at: Atendimento }) {
               <p className="muted" style={{ fontSize: '.75rem', margin: '.2rem 0 .5rem' }}>Anexe RG/CNH, matrícula ou contrato (foto ou PDF).</p>
               <div style={{ display: 'flex', gap: '.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
                 <select className="input" style={{ width: 'auto' }} value={tipoDoc} onChange={e => setTipoDoc(e.target.value)}>
-                  {DOC_TIPOS.map(t => <option key={t} value={t}>{t.toUpperCase()}</option>)}
+                  {DOC_TIPOS.map(t => <option key={t.v} value={t.v}>{t.label}</option>)}
                 </select>
                 <input type="file" accept="image/*,application/pdf" disabled={enviandoDoc} onChange={e => subirDoc(e.target.files?.[0] ?? null)} />
               </div>
@@ -178,12 +177,34 @@ export default function TelaConversa({ at }: { at: Atendimento }) {
 
             <div className="card p-4">
               <strong style={{ color: 'var(--navy)', fontSize: '.92rem' }}>Contato</strong>
-              <label className="label">Seu nome</label>
-              <input className="input" value={contato.nome || ''} onChange={e => setContato(c => ({ ...c, nome: e.target.value }))} />
-              <label className="label">WhatsApp (com DDD)</label>
-              <input className="input" placeholder="(11) 99999-9999" value={contato.whatsapp || ''} onChange={e => setContato(c => ({ ...c, whatsapp: e.target.value }))} />
-              <label className="label">E-mail (opcional)</label>
-              <input className="input" value={contato.email || ''} onChange={e => setContato(c => ({ ...c, email: e.target.value }))} />
+
+              {temContato && !editando ? (
+                <>
+                  <div style={{ fontSize: '.76rem', color: '#1E7A4F', margin: '.35rem 0 .55rem' }}>
+                    ✓ Anotado da sua conversa — confira antes de enviar.
+                  </div>
+                  <div style={{ display: 'grid', gap: '.3rem', fontSize: '.84rem' }}>
+                    <Dado rotulo="Nome" valor={contato.nome} />
+                    <Dado rotulo="WhatsApp" valor={contato.whatsapp} />
+                    <Dado rotulo="E-mail" valor={contato.email} opcional />
+                  </div>
+                  <button className="btn-ghost mt-3" style={{ padding: '.25rem .7rem', fontSize: '.78rem' }}
+                    onClick={() => setEditando(true)}>Corrigir</button>
+                </>
+              ) : (
+                <>
+                  <label className="label">Seu nome</label>
+                  <input className="input" value={contato.nome || ''} onChange={e => setContato(c => ({ ...c, nome: e.target.value }))} />
+                  <label className="label">WhatsApp (com DDD)</label>
+                  <input className="input" placeholder="(11) 99999-9999" value={contato.whatsapp || ''} onChange={e => setContato(c => ({ ...c, whatsapp: e.target.value }))} />
+                  <label className="label">E-mail (opcional)</label>
+                  <input className="input" value={contato.email || ''} onChange={e => setContato(c => ({ ...c, email: e.target.value }))} />
+                  {temContato && (
+                    <button className="btn-primary mt-3" style={{ padding: '.25rem .7rem', fontSize: '.78rem' }}
+                      onClick={() => { setEditando(false); setContatoConfirmado(true) }}>Pronto</button>
+                  )}
+                </>
+              )}
             </div>
 
             <div className="card p-4">
@@ -196,7 +217,15 @@ export default function TelaConversa({ at }: { at: Atendimento }) {
                 <p className="muted" style={{ fontSize: '.72rem', lineHeight: 1.5, marginTop: '.3rem' }}>{LGPD_TEXTO}</p>
               </details>
               {erro && <div style={{ color: '#9b2c2c', fontSize: '.82rem', marginTop: '.5rem' }}>{erro}</div>}
-              <button className="btn-brass mt-3" style={{ width: '100%' }} onClick={finalizar} disabled={loading}>{loading ? 'Enviando…' : 'Finalizar e enviar ao cartório'}</button>
+              <button className="btn-brass mt-3" style={{ width: '100%' }}
+                onClick={() => {
+                  // A validação roda antes da janela: não faz sentido pedir
+                  // conferência de um envio que ainda não pode acontecer.
+                  const faltaNome = !contato.nome, faltaZap = !contato.whatsapp
+                  if (faltaNome || faltaZap || !lgpd) { finalizar(); return }
+                  setConferindo(montarResumo())
+                }}
+                disabled={loading}>{loading ? 'Enviando…' : 'Finalizar e enviar ao cartório'}</button>
             </div>
           </div>
         </div>
@@ -205,5 +234,54 @@ export default function TelaConversa({ at }: { at: Atendimento }) {
       @keyframes pulso { 0%{opacity:.35} 50%{opacity:1} 100%{opacity:.35} }
       .pulse-dot{ animation: pulso 1.2s infinite }`}</style>
     </div>
+      <Modal
+        aberto={conferindo !== null}
+        titulo="Confira antes de enviar ao cartório"
+        rotuloConfirmar="Está correto, enviar"
+        rotuloCancelar="Voltar e corrigir"
+        confirmando={loading}
+        onFechar={() => setConferindo(null)}
+        onConfirmar={async () => { await finalizar(); setConferindo(null) }}
+      >
+        {conferindo && (
+          <div style={{ display: 'grid', gap: '.85rem' }}>
+            <Secao titulo="Serviço">{conferindo.servico || '—'}</Secao>
+
+            <Secao titulo="Seus dados">
+              <Dado rotulo="Nome" valor={conferindo.contato.nome} />
+              <Dado rotulo="WhatsApp" valor={conferindo.contato.whatsapp} />
+              <Dado rotulo="E-mail" valor={conferindo.contato.email} opcional />
+            </Secao>
+
+            {conferindo.empreendimento && (
+              <Secao titulo="Empreendimento">{conferindo.empreendimento}</Secao>
+            )}
+
+            <Secao titulo={`Documentos anexados (${conferindo.documentos.length})`}>
+              {conferindo.documentos.length
+                ? <ul style={{ margin: 0, paddingLeft: '1.1rem' }}>
+                    {conferindo.documentos.map((d, i) => <li key={i}>{d}</li>)}
+                  </ul>
+                : <span style={{ color: '#9A3412' }}>
+                    Nenhum documento anexado. Dá para enviar assim mesmo — o cartório pedirá depois.
+                  </span>}
+            </Secao>
+
+            <Secao titulo="O que você informou na conversa">
+              {conferindo.falas.length
+                ? <ul style={{ margin: 0, paddingLeft: '1.1rem', display: 'grid', gap: '.25rem' }}>
+                    {conferindo.falas.map((f, i) => <li key={i}>{f}</li>)}
+                  </ul>
+                : <span style={{ color: '#6B7280' }}>—</span>}
+            </Secao>
+
+            <div style={{ fontSize: '.78rem', color: '#6B7280', borderTop: '1px solid rgba(0,0,0,.07)', paddingTop: '.6rem' }}>
+              Ao confirmar, o cartório recebe estes dados e o protocolo é gerado.
+              Cancelando, você volta à conversa e pode corrigir o que quiser.
+            </div>
+          </div>
+        )}
+      </Modal>
+    </>
   )
 }

@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import {
   listarDocumentos, uploadDocumento, extrairDocumento, marcarValidado, urlDocumento,
-  TIPOS_DOC_INSTRUCAO, type Documento, type TipoDocInstrucao,
+  confrontarComMatricula,
+  TIPOS_DOC_INSTRUCAO, type Documento, type TipoDocInstrucao, type Confronto,
 } from '../lib/documentos'
 import type { Solicitacao, Parte, TipoAto } from '../lib/types'
 
@@ -18,6 +19,7 @@ export default function DocumentosInstrucao({
   const [tipoSel, setTipoSel] = useState<TipoDocInstrucao>('rg')
   const [enviando, setEnviando] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const [confrontos, setConfrontos] = useState<Record<string, Confronto>>({})
   const [erro, setErro] = useState<string | null>(null)
   const [edit, setEdit] = useState<Record<string, any>>({})
   const [papelSel, setPapelSel] = useState<Record<string, string>>({})
@@ -82,6 +84,15 @@ export default function DocumentosInstrucao({
       await supabase.from('solicitacoes').update({ dados }).eq('id', solicitacao.id)
       await finalizar(d)
     } catch (e: any) { setErro(e.message) } finally { setBusy(null) }
+  }
+
+  async function confrontar(d: Documento) {
+    setBusy(d.id); setErro(null)
+    try {
+      const c = await confrontarComMatricula(d.id)
+      setConfrontos(prev => ({ ...prev, [d.id]: c }))
+    } catch (e: any) { setErro(e.message ?? 'Falha ao confrontar.') }
+    finally { setBusy(null) }
   }
 
   async function abrir(d: Documento) { const u = await urlDocumento(d.storage_path); if (u) window.open(u, '_blank') }
@@ -172,6 +183,13 @@ export default function DocumentosInstrucao({
                       )}
                       <button className="btn-primary mt-3" onClick={() => aplicarImovel(d)} disabled={busy === d.id}>Validar e aplicar ao imóvel</button>
                     </>
+                  ) : d.tipo === 'compromisso' ? (
+                    <ResumoContrato
+                      dados={edit[d.id]}
+                      confronto={confrontos[d.id] ?? d.confronto ?? null}
+                      ocupado={busy === d.id}
+                      onConfrontar={() => confrontar(d)}
+                    />
                   ) : (
                     <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(edit[d.id], null, 2)}</pre>
                   )}
@@ -179,6 +197,136 @@ export default function DocumentosInstrucao({
               )}
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================================================
+// Resumo do contrato de compra e venda
+//
+// Substitui o JSON cru que aparecia aqui. O contrato é o documento que traz
+// mais dado por página em todo o protocolo — exibi-lo como despejo de chaves
+// obrigava o escrevente a reler o PDF de qualquer jeito.
+// ============================================================================
+
+const VEREDITO: Record<string, { rotulo: string; cor: string }> = {
+  apto: { rotulo: 'Confere com a matrícula', cor: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  atencao: { rotulo: 'Atenção — verificar', cor: 'bg-amber-50 text-amber-800 border-amber-200' },
+  impeditivo: { rotulo: 'Impeditivo', cor: 'bg-red-50 text-red-700 border-red-200' },
+}
+const STATUS_ITEM: Record<string, string> = {
+  confere: 'text-emerald-700', divergente: 'text-red-700', ausente: 'text-amber-700',
+}
+
+function Linha({ r, v }: { r: string; v: any }) {
+  const txt = Array.isArray(v) ? v.join('; ') : String(v ?? '').trim()
+  if (!txt) return null
+  return (
+    <div className="flex gap-2 text-xs py-0.5">
+      <span className="text-ink/50 shrink-0" style={{ minWidth: 130 }}>{r}</span>
+      <span className="text-ink">{txt}</span>
+    </div>
+  )
+}
+
+function Grupo({ titulo, children }: { titulo: string; children: React.ReactNode }) {
+  return (
+    <div className="mt-3 first:mt-0">
+      <div className="text-[11px] uppercase tracking-wider text-brass mb-1">{titulo}</div>
+      {children}
+    </div>
+  )
+}
+
+function pessoas(lista: any): string {
+  if (!Array.isArray(lista)) return ''
+  return lista.filter(Boolean).map((p: any) => {
+    const q = [p.cpf_cnpj, p.estado_civil, p.regime_bens, p.profissao].filter(Boolean).join(', ')
+    return q ? `${p.nome} (${q})` : p.nome
+  }).join(' · ')
+}
+
+function ResumoContrato({
+  dados, confronto, ocupado, onConfrontar,
+}: { dados: any; confronto: Confronto | null; ocupado: boolean; onConfrontar: () => void }) {
+  const d = dados ?? {}
+  const clausulas: any[] = Array.isArray(d.clausulas_relevantes) ? d.clausulas_relevantes : []
+
+  return (
+    <div>
+      <Grupo titulo="Partes">
+        <Linha r="Comprador(es)" v={pessoas(d.compradores)} />
+        <Linha r="Vendedor(es)" v={pessoas(d.vendedores)} />
+      </Grupo>
+
+      <Grupo titulo="Objeto">
+        <Linha r="Empreendimento" v={d.empreendimento} />
+        <Linha r="Unidade" v={d.unidade} />
+        <Linha r="Torre / bloco" v={d.torre_bloco} />
+        <Linha r="Vaga" v={d.vaga_garagem} />
+        <Linha r="Matrícula" v={d.imovel_matricula} />
+        <Linha r="Cartório de RI" v={d.imovel_cartorio_ri} />
+        <Linha r="Descrição" v={d.imovel_descricao} />
+      </Grupo>
+
+      <Grupo titulo="Negócio">
+        <Linha r="Valor total" v={d.valor_total} />
+        <Linha r="Sinal / entrada" v={d.sinal} />
+        <Linha r="Saldo" v={d.saldo} />
+        <Linha r="Forma de pagamento" v={d.forma_pagamento} />
+        <Linha r="Instituição financeira" v={d.instituicao_financeira} />
+        <Linha r="Data do contrato" v={d.data_contrato} />
+        <Linha r="Prazo de entrega" v={d.prazo_entrega} />
+      </Grupo>
+
+      {clausulas.length > 0 && (
+        <Grupo titulo={`Cláusulas relevantes (${clausulas.length})`}>
+          <div className="space-y-1.5">
+            {clausulas.map((c: any, i: number) => (
+              <div key={i} className="text-xs border-l-2 border-brass/40 pl-2">
+                <b className="capitalize">{typeof c === 'string' ? c : (c.tema || 'cláusula')}</b>
+                {typeof c !== 'string' && c.resumo && <span className="text-ink/70"> — {c.resumo}</span>}
+                {typeof c !== 'string' && c.trecho && (
+                  <div className="text-ink/45 italic mt-0.5">“{c.trecho}”</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Grupo>
+      )}
+
+      <button className="btn-ghost mt-4" onClick={onConfrontar} disabled={ocupado}>
+        {ocupado ? 'Confrontando…' : 'Confrontar com matrícula'}
+      </button>
+
+      {confronto && (
+        <div className={`mt-3 rounded-lg border p-3 ${VEREDITO[confronto.veredito]?.cor ?? 'bg-gray-50 border-gray-200'}`}>
+          <div className="text-xs font-semibold">
+            {VEREDITO[confronto.veredito]?.rotulo ?? confronto.veredito}
+          </div>
+          {confronto.resumo && <div className="text-xs mt-1">{confronto.resumo}</div>}
+
+          <div className="mt-2 space-y-1">
+            {(confronto.itens ?? []).map((it, i) => (
+              <div key={i} className="text-xs">
+                <span className={`font-medium ${STATUS_ITEM[it.status] ?? ''}`}>
+                  {it.status === 'confere' ? '✓' : it.status === 'divergente' ? '✕' : '○'} {it.campo}
+                </span>
+                {it.status !== 'confere' && (
+                  <div className="text-ink/60 ml-4">
+                    contrato: {it.contrato || '—'} · matrícula: {it.matricula || '—'}
+                    {it.observacao && <> — {it.observacao}</>}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <div className="text-[11px] text-ink/50 mt-2">
+            Conferência assistida por IA sobre as leituras já validadas. Não substitui a conferência do escrevente.
+          </div>
         </div>
       )}
     </div>

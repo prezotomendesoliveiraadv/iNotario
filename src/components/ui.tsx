@@ -35,7 +35,9 @@ const NAV: ItemNav[] = [
   { to: '/painel-construtoras', label: 'Painel construtoras', papeis: ['escrevente', 'tabeliao_substituto', 'tabeliao_oficial', 'tabeliao'] },
   { to: '/construtoras', label: 'Construtoras', papeis: ['escrevente', 'tabeliao_substituto', 'tabeliao_oficial', 'tabeliao'] },
   { to: '/juridico', label: 'Consulta jurídica', papeis: ['escrevente', 'tabeliao_substituto', 'tabeliao_oficial', 'tabeliao'] },
-  { to: '/uso',    label: 'Uso e faturamento', papeis: ['financeiro', 'tabeliao_oficial', 'tabeliao', 'admin_plataforma'] },
+  // Mostra a cobrança do cartório: nível administração apenas. 'financeiro'
+  // saiu daqui de propósito — ele lança emolumentos do ato, que é outra coisa.
+  { to: '/uso',    label: 'Uso e faturamento', papeis: ['admin_cartorio', 'tabeliao_oficial', 'tabeliao', 'admin_plataforma'] },
 ]
 
 const PAPEL_NOME: Record<string, string> = {

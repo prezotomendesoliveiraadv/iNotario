@@ -74,13 +74,18 @@ export function useAtendimento() {
   // A Artemis preenche os campos da tela; a confirmação continua sendo do cliente.
   function aplicarCampos(c: any) {
     if (!c) return
-    setContato(prev => ({
-      ...prev,
-      nome: c.nome ?? prev.nome,
-      whatsapp: c.telefone ?? prev.whatsapp,
-      email: c.email ?? prev.email,
-    }))
-    if (c.nome || c.telefone) setContatoConfirmado(false)
+    const atual = contatoRef.current ?? {}
+    const nome = c.nome ?? atual.nome
+    const whatsapp = c.telefone ?? atual.whatsapp
+    const email = c.email ?? atual.email
+
+    // Repetir o mesmo dado na conversa não é uma mudança: sem esta comparação,
+    // a pessoa confirma os dados e a confirmação se desfaz sozinha quando ela
+    // menciona o próprio nome de novo três falas depois.
+    if (nome === atual.nome && whatsapp === atual.whatsapp && email === atual.email) return
+
+    setContato(prev => ({ ...prev, nome, whatsapp, email }))
+    setContatoConfirmado(false)
   }
   useEffect(() => {
     if (canal === 'TEXTO' && !loading && step === 'conversa') campoRef.current?.focus()
@@ -207,13 +212,27 @@ export function useAtendimento() {
   async function subirDoc(file: File | null) {
     if (!file) return
     setEnviandoDoc(true); setErro(null)
-    try { await atenderUpload(token, file, tipoDoc); setDocs(d => [...d, `${tipoDoc.toUpperCase()} · ${file.name}`]) }
+    try {
+      // A lista vem do servidor: é a mesma que a Artemis enxerga, então a tela
+      // nunca mostra um documento que o backend não considera recebido.
+      const recebidos = await atenderUpload(token, file, tipoDoc)
+      setDocs(recebidos.map(d => `${String(d.tipo).toUpperCase()} · ${d.nome_arquivo}`))
+    }
     catch (e: any) { setErro(e.message ?? 'Falha ao anexar.') } finally { setEnviandoDoc(false) }
   }
 
   async function finalizar() {
-    if (!lgpd) { setErro('É necessário aceitar os termos da LGPD.'); return }
-    if (!contato.nome || !contato.whatsapp) { setErro('Informe ao menos seu nome e WhatsApp para contato.'); return }
+    const faltando: string[] = []
+    if (!contato.nome) faltando.push('seu nome')
+    if (!contato.whatsapp) faltando.push('seu WhatsApp')
+    if (!lgpd) faltando.push('o aceite da LGPD')
+    if (faltando.length) {
+      const lista = faltando.length === 1
+        ? faltando[0]
+        : `${faltando.slice(0, -1).join(', ')} e ${faltando[faltando.length - 1]}`
+      setErro(`Antes de enviar, falta ${lista}.`)
+      return
+    }
     setLoading(true); setErro(null)
     try {
       vadRef.current?.stop(); vadRef.current = null; setVozAtiva(false)
@@ -255,6 +274,22 @@ export function useAtendimento() {
     finally { setLoading(false) }
   }
 
+  /**
+   * Resumo do que o solicitante informou, para conferência antes de gerar o
+   * protocolo. Sai do estado local (nada de nova chamada ao modelo): o que
+   * aparece na janela é exatamente o que será enviado ao cartório.
+   */
+  function montarResumo() {
+    const falas = msgsRef.current.filter(m => m.role === 'user').map(m => m.content.trim()).filter(Boolean)
+    return {
+      servico: tipoNome,
+      contato: { nome: contato.nome ?? '', whatsapp: contato.whatsapp ?? '', email: contato.email ?? '' },
+      empreendimento: emprConfirmado,
+      documentos: docs,
+      falas,
+    }
+  }
+
   const legendaExibida = idioma === 'en' ? (legendaEn || legenda) : legenda
 
   return {
@@ -280,6 +315,7 @@ export function useAtendimento() {
     campoRef, fimRef,
     // ações
     iniciar, enviarTexto, enviarFormularioManual, ligarVoz, desligarVoz, subirDoc, finalizar,
+    montarResumo,
   }
 }
 

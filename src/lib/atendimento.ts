@@ -39,10 +39,23 @@ export async function atenderTraduzir(token: string, texto: string): Promise<{ t
   return await call({ action: 'traduzir', token, texto })
 }
 
-export async function atenderUpload(token: string, file: File, tipoDoc: string): Promise<void> {
+/**
+ * Anexa um documento em três tempos: reservar o caminho, subir o arquivo e
+ * confirmar que ele chegou. A confirmação é o que separa "reservado" de
+ * "recebido" — sem ela, um upload interrompido deixava um registro fantasma e
+ * a Artemis passava a dizer que tinha recebido o documento.
+ *
+ * Devolve a lista de documentos efetivamente recebidos, conferida no servidor.
+ */
+export async function atenderUpload(
+  token: string, file: File, tipoDoc: string,
+): Promise<{ tipo: string; nome_arquivo: string }[]> {
   const r = await call({ action: 'upload-url', token, nome_arquivo: file.name, tipo_doc: tipoDoc, mime: file.type })
   const up = await supabase.storage.from('documentos').uploadToSignedUrl(r.path, r.token, file)
   if (up.error) throw up.error
+  const ok = await call({ action: 'upload-ok', token, path: r.path })
+  if (!ok?.recebido) throw new Error('O arquivo não chegou ao servidor. Tente anexar de novo.')
+  return ok.documentos ?? []
 }
 
 export async function atenderFinalizar(token: string, p: {

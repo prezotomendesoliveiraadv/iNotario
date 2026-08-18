@@ -3,7 +3,8 @@ import { dataCurta, dataHora } from '../lib/tempo'
 import { Layout } from '../components/ui'
 import {
   adminListar, adminSalvarPlano, adminUsuarioMaster, adminGerarFatura, adminExtrato, adminMarcarPaga,
-  brl, competenciaAtual, type CartorioAdmin, type Plano,
+  adminSalvarPreco, listarPrecos, ITEM_ROTULO,
+  brl, competenciaAtual, type CartorioAdmin, type Plano, type Preco,
 } from '../lib/faturamento'
 
 export default function AdminPlataforma() {
@@ -94,7 +95,13 @@ export default function AdminPlataforma() {
                 Assinatura ativa
               </label>
               <button className="btn-primary mt-3" disabled={busy === 'plano'} onClick={() => run('plano', () => adminSalvarPlano(sel.id, plano), 'Plano salvo.')}>Salvar plano</button>
+              <p className="text-[11px] text-ink/50 mt-2">
+                O valor por ato acima é herança do modelo antigo e não é mais usado no cálculo.
+                A cobrança variável sai da tabela de preços abaixo.
+              </p>
             </div>
+
+            <TabelaPrecos cartorioId={sel.id} onSalvo={carregar} />
 
             <div className="card p-5">
               <h2 className="font-semibold text-navy mb-1">Login master do cartório</h2>
@@ -153,5 +160,90 @@ export default function AdminPlataforma() {
         )}
       </div>
     </Layout>
+  )
+}
+
+
+// ============================================================================
+// Tabela de preços por evento
+//
+// Uma linha por item cobrável. Deixar em branco significa herdar o preço padrão
+// da plataforma; preencher cria a exceção só para este cartório — que é como
+// contrato negociado caso a caso costuma funcionar.
+// ============================================================================
+
+function TabelaPrecos({ cartorioId, onSalvo }: { cartorioId: string; onSalvo: () => void }) {
+  const [precos, setPrecos] = useState<Preco[]>([])
+  const [rascunho, setRascunho] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState<string | null>(null)
+  const [msg, setMsg] = useState<string | null>(null)
+
+  async function carregar() {
+    try { setPrecos(await listarPrecos(cartorioId)) } catch { /* a tela segue utilizável sem isto */ }
+  }
+  useEffect(() => { carregar() }, [cartorioId])
+
+  const padrao = (item: string) => precos.find(p => p.cartorio_id === null && p.item === item)
+  const doCartorio = (item: string) => precos.find(p => p.cartorio_id === cartorioId && p.item === item)
+
+  async function salvar(item: string, escopo: 'padrao' | 'cartorio') {
+    const chave = `${escopo}:${item}`
+    const bruto = rascunho[chave]
+    if (bruto === undefined || bruto === '') return
+    setBusy(chave); setMsg(null)
+    try {
+      await adminSalvarPreco(item, Number(String(bruto).replace(',', '.')), escopo === 'cartorio' ? cartorioId : null)
+      setRascunho(r => { const n = { ...r }; delete n[chave]; return n })
+      await carregar(); onSalvo()
+      setMsg('Preço atualizado.')
+    } catch (e: any) { setMsg(e.message ?? 'Falha ao salvar.') }
+    finally { setBusy(null) }
+  }
+
+  return (
+    <div className="card p-5">
+      <h2 className="font-semibold text-navy mb-1">Tabela de preços por evento</h2>
+      <p className="text-[11px] text-ink/50 mb-3">
+        A coluna “padrão” vale para todos os cartórios. A coluna “deste cartório”, quando preenchida,
+        sobrepõe o padrão apenas aqui.
+      </p>
+
+      <div className="border border-black/5 rounded-lg overflow-hidden">
+        <div className="flex text-[11px] uppercase tracking-wider text-ink/50 bg-paper px-3 py-1.5">
+          <span className="flex-1">Item</span>
+          <span className="w-32 text-right">Padrão</span>
+          <span className="w-40 text-right">Deste cartório</span>
+        </div>
+        {Object.entries(ITEM_ROTULO).map(([item, rotulo]) => {
+          const vp = padrao(item), vc = doCartorio(item)
+          return (
+            <div key={item} className="flex items-center gap-2 px-3 py-1.5 border-t border-black/5">
+              <span className="flex-1 text-xs">{rotulo}</span>
+
+              <div className="w-32 flex gap-1 justify-end">
+                <input className="input text-right" style={{ width: 78, padding: '.2rem .4rem', fontSize: '.75rem' }}
+                  placeholder={String(vp?.valor_unitario ?? 0)}
+                  value={rascunho[`padrao:${item}`] ?? ''}
+                  onChange={e => setRascunho(r => ({ ...r, [`padrao:${item}`]: e.target.value }))}
+                  onBlur={() => salvar(item, 'padrao')}
+                  disabled={busy === `padrao:${item}`} />
+              </div>
+
+              <div className="w-40 flex gap-1 justify-end items-center">
+                <input className="input text-right" style={{ width: 78, padding: '.2rem .4rem', fontSize: '.75rem' }}
+                  placeholder={vc ? String(vc.valor_unitario) : 'herda'}
+                  value={rascunho[`cartorio:${item}`] ?? ''}
+                  onChange={e => setRascunho(r => ({ ...r, [`cartorio:${item}`]: e.target.value }))}
+                  onBlur={() => salvar(item, 'cartorio')}
+                  disabled={busy === `cartorio:${item}`} />
+                {vc && <span className="badge bg-brass/15 text-[10px]">exceção</span>}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      {msg && <div className="text-xs text-ink/60 mt-2">{msg}</div>}
+    </div>
   )
 }
