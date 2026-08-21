@@ -17,11 +17,10 @@ import { corsHeaders, json } from "../_shared/cors.ts";
 import { respostaErro } from "../_shared/erros.ts";
 import {
   buildSystemPrompt, callClaude, callModel, extrairJson, sha256, PROVEDOR_ATIVO, MODELO_ATIVO,
-  type Modo, type Contexto, type Msg,
-} from "../_shared/artemis.ts";
+  type Modo, type Contexto, type Msg, gravarUso } from "../_shared/artemis.ts";
 import { criarCofre, type Entidade } from "../_shared/tokenizer.ts";
 import { clausulasMatricula, analisarMatricula } from "../_shared/matricula.ts";
-import { espelharModelo, dicionarioDoAto } from "../_shared/espelho.ts";
+import { espelharModelo, dicionarioDoAto, inserirClausulas } from "../_shared/espelho.ts";
 
 const ESQUEMA_ELABORACAO = `Responda SOMENTE com um objeto JSON válido (sem texto fora do JSON, sem cercas de código), no formato:
 {
@@ -81,6 +80,7 @@ Deno.serve(async (req) => {
     let modeloFonte: string | null = null;
     let modeloTexto = "";
     let modeloTitulo = "";
+    let clausulasEsp: { nome: string; texto: string }[] = [];
     if (body.solicitacaoId) {
       const admin2 = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
@@ -103,6 +103,7 @@ inaplicável, mantenha a numeração coerente e registre a supressão em "alerta
 
       const { data: cls } = await admin2.from("solicitacao_clausulas")
         .select("nome, texto, ordem").eq("solicitacao_id", body.solicitacaoId).order("ordem");
+      clausulasEsp = ((cls as any[]) ?? []).map((c) => ({ nome: c.nome, texto: c.texto }));
       if (((cls as any[]) ?? []).length) {
         blocoClausulas = `
 
@@ -126,6 +127,8 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
       Deno.env.get("SUPABASE_ANON_KEY")!,
       { global: { headers: { Authorization: req.headers.get("Authorization") ?? "" } } },
     );
+    const { data: _u } = await supabase.auth.getUser();
+    const uid = _u?.user?.id ?? null;
 
     // Ônus da matrícula -> cláusulas/exigências na minuta + alertas no parecer
     let exigenciasTok = "";
@@ -195,7 +198,15 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
         .sort((a, b) => (a.status === "validado" ? -1 : 1))[0]?.extraido ?? null;
 
       const sol = solEsp as any;
-      const dic = dicionarioDoAto({
+      // O painel da tela e a minuta leem a MESMA consolidação: sem isto, o
+      // escrevente confere um valor na tela e a escritura sai com outro.
+      const { data: cons } = await supabase.rpc("consolidar_ato", { p_solicitacao: solicitacaoId });
+      const doPainel: Record<string, string> = {};
+      for (const [k, v] of Object.entries(((cons as any)?.campos ?? {}) as Record<string, any>)) {
+        if (v?.valor) doPainel[k] = String(v.valor);
+      }
+
+      const dicBase = dicionarioDoAto({
         solicitacao: sol,
         partes: (partesEsp as any[]) ?? [],
         imovel: pega("matricula") ?? sol?.dados,
@@ -203,11 +214,32 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
         empreendimento: sol?.empreendimentos,
         cartorio: sol?.cartorios,
       });
+      const dic = { ...dicBase, ...doPainel };
 
       const esp = espelharModelo(modeloTexto, dic);
       conteudo = esp.texto;
       origemTexto = "espelho_modelo";
       pendencias = esp.pendentes;
+
+      // As cláusulas especiais precisam entrar AQUI, no texto espelhado. A
+      // instrução equivalente no prompt não tem mais efeito: a saída do modelo
+      // de linguagem é descartada quando há espelho.
+      if (clausulasEsp.length) {
+        const ins = inserirClausulas(conteudo, clausulasEsp);
+        conteudo = ins.texto;
+        result.qualificacao = [
+          ...(result.qualificacao ?? []),
+          {
+            item: `${ins.inseridas} cláusula(s) especial(is) inserida(s) no texto`,
+            status: ins.posicao === "marcador" ? "ok" : "atencao",
+            fundamento: ins.posicao === "marcador"
+              ? "Posicionadas no marcador previsto pelo modelo da construtora."
+              : ins.posicao === "antes_do_fecho"
+                ? "O modelo não traz marcador de cláusulas especiais; foram inseridas antes do fecho. Confira a posição e a numeração."
+                : "O modelo não traz marcador nem fecho reconhecível; foram anexadas ao final. REPOSICIONE antes de aprovar.",
+          },
+        ];
+      }
 
       // As pendências entram no parecer: o escrevente vê no mesmo lugar em que
       // já lê as demais ressalvas, em vez de precisar caçar colchetes no texto.
@@ -252,8 +284,9 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
         tokens: cofre.tamanho,
         modelo: MODELO_ATIVO,
         provedores: [PROVEDOR_ATIVO],
-      },
+      }, p_ator: uid ?? null,
     });
+    await gravarUso(supabase, "artemis-compile", (sol as any)?.cartorio_id ?? null, solicitacaoId);
 
     return json({
       mode, minuta, qualificacao,

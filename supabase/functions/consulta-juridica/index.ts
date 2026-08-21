@@ -6,7 +6,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { respostaErro } from "../_shared/erros.ts";
-import { callModelJson, PROVEDOR_ATIVO, MODELO_ATIVO } from "../_shared/artemis.ts";
+import { callModelJson, PROVEDOR_ATIVO, MODELO_ATIVO, gravarUso } from "../_shared/artemis.ts";
 
 const LEGISLACAO = `LEGISLAÇÃO NOTARIAL E REGISTRAL DE REFERÊNCIA (Brasil):
 - CF/88, art. 236 (serviços notariais e de registro, por delegação).
@@ -143,8 +143,9 @@ ${blocoAcervo}`;
       if (solicitacaoId) {
         await admin.rpc("registrar_custodia", {
           p_solicitacao: solicitacaoId, p_minuta: null, p_acao: "consulta_juridica",
-          p_detalhe: { pergunta: registro.pergunta, fontes: fontes.length },
+          p_detalhe: { pergunta: registro.pergunta, fontes: fontes.length }, p_ator: uid ?? null,
         });
+    await gravarUso(admin, "consulta-juridica", null, solicitacaoId);
       }
     }
 

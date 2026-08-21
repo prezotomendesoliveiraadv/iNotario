@@ -38,6 +38,46 @@ export const PROVEDOR_ATIVO = PROVIDER;
 export const MODELO_ATIVO = MODEL;
 
 // ---------------------------------------------------------------------------
+// Medição de tokens
+//
+// Cada provedor devolve o consumo real na própria resposta. Acumulamos por
+// invocação da Edge Function e gravamos uma vez ao final — assim o custo por
+// ato deixa de ser estimativa e vira medição, que é o que sustenta a cláusula
+// de reajuste por custo de IA.
+// ---------------------------------------------------------------------------
+let _entrada = 0, _saida = 0;
+
+export function registrarUso(entrada?: number, saida?: number) {
+  _entrada += Number(entrada ?? 0);
+  _saida += Number(saida ?? 0);
+}
+
+/** Consumo acumulado nesta invocação; zera ao ser lido. */
+export function consumirUso(): { entrada: number; saida: number } {
+  const u = { entrada: _entrada, saida: _saida };
+  _entrada = 0; _saida = 0;
+  return u;
+}
+
+/**
+ * Grava o consumo desta invocação. Best-effort: falhar aqui nunca pode derrubar
+ * a operação do cartório — perder uma medição é barato, perder um ato não é.
+ */
+export async function gravarUso(
+  admin: any, funcao: string, cartorioId: string | null, solicitacaoId: string | null,
+) {
+  const u = consumirUso();
+  if (!u.entrada && !u.saida) return;
+  try {
+    await admin.from("uso_tokens").insert({
+      cartorio_id: cartorioId, solicitacao_id: solicitacaoId, funcao,
+      provedor: PROVIDER, modelo: MODEL,
+      tokens_entrada: u.entrada, tokens_saida: u.saida,
+    });
+  } catch { /* medição é best-effort */ }
+}
+
+// ---------------------------------------------------------------------------
 // System prompt
 // ---------------------------------------------------------------------------
 export function buildSystemPrompt(
@@ -224,6 +264,7 @@ async function callAnthropic(system: string, messages: Msg[], maxTokens: number,
   });
   if (!r.ok) throw new Error(`Anthropic ${r.status}: ${await r.text()}`);
   const data = await r.json();
+  registrarUso(data?.usage?.input_tokens, data?.usage?.output_tokens);
   return (data.content ?? [])
     .filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();
 }
@@ -248,6 +289,7 @@ async function callGemini(system: string, messages: Msg[], maxTokens: number, op
   );
   if (!r.ok) throw new Error(`Gemini ${r.status}: ${await r.text()}`);
   const data = await r.json();
+  registrarUso(data?.usageMetadata?.promptTokenCount, data?.usageMetadata?.candidatesTokenCount);
   const cand = data?.candidates?.[0];
   const texto = (cand?.content?.parts ?? []).map((p: any) => p.text ?? "").join("").trim();
   if (!texto) throw new Error(`Gemini sem resposta (${data?.promptFeedback?.blockReason || cand?.finishReason || "vazio"}).`);
@@ -283,6 +325,7 @@ async function anthropicVision(system: string, userText: string, files: ArquivoI
   });
   if (!r.ok) throw new Error(`Anthropic(vision) ${r.status}: ${await r.text()}`);
   const data = await r.json();
+  registrarUso(data?.usage?.input_tokens, data?.usage?.output_tokens);
   return (data.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("\n").trim();
 }
 
@@ -301,6 +344,7 @@ async function geminiVision(system: string, userText: string, files: ArquivoIA[]
   );
   if (!r.ok) throw new Error(`Gemini(vision) ${r.status}: ${await r.text()}`);
   const data = await r.json();
+  registrarUso(data?.usageMetadata?.promptTokenCount, data?.usageMetadata?.candidatesTokenCount);
   const ps = data?.candidates?.[0]?.content?.parts ?? [];
   return ps.map((p: any) => p.text ?? "").join("").trim();
 }
@@ -422,6 +466,7 @@ REGRAS ABSOLUTAS:
   );
   if (!r.ok) throw new Error(`STT(Gemini) ${r.status}: ${await r.text()}`);
   const data = await r.json();
+  registrarUso(data?.usageMetadata?.promptTokenCount, data?.usageMetadata?.candidatesTokenCount);
   const parts = data?.candidates?.[0]?.content?.parts ?? [];
   const t = parts.map((p: any) => p.text ?? "").join("").trim();
   if (!t || pareceMetaTranscricao(t)) {

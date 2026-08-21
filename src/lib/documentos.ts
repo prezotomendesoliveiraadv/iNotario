@@ -33,6 +33,8 @@ export interface Documento {
   nome_arquivo: string; storage_path: string; mime: string | null
   extraido: Record<string, any> | null; status: 'pendente' | 'extraido' | 'validado'
   confronto?: Confronto | null
+  vinculado?: boolean
+  validade_ate?: string | null
   created_at: string
 }
 
@@ -84,4 +86,23 @@ export async function marcarValidado(documentoId: string): Promise<void> {
 export async function urlDocumento(path: string): Promise<string | null> {
   const { data } = await supabase.storage.from('documentos').createSignedUrl(path, 3600)
   return data?.signedUrl ?? null
+}
+
+/**
+ * Vincula (ou desvincula) o documento ao ato. Leitura por IA é insumo; vínculo
+ * é decisão humana — só documento vinculado alimenta o painel e a minuta.
+ */
+export async function vincularDocumento(documentoId: string, vinculado: boolean) {
+  const { error } = await supabase.from('documentos').update({ vinculado }).eq('id', documentoId)
+  if (error) throw error
+}
+
+/** Manda a IA ler uma certidão do cadastro da construtora/empreendimento. */
+export async function lerCertidaoConstrutora(certidaoId: string) {
+  const { data, error } = await supabase.functions.invoke('artemis-extract', {
+    body: { acao: 'certidao_construtora', certidaoId },
+  })
+  const msg = await mensagemErroFuncao(error, data, 'artemis-extract')
+  if (msg) throw new Error(msg)
+  return (data as any).leitura
 }

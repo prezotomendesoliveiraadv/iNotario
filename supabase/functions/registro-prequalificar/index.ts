@@ -7,7 +7,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { respostaErro } from "../_shared/erros.ts";
 import { preQualificarRegistro, APTIDAO_LABEL } from "../_shared/registro.ts";
-import { callModel, PROVEDOR_ATIVO } from "../_shared/artemis.ts";
+import { callModel, PROVEDOR_ATIVO, gravarUso } from "../_shared/artemis.ts";
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -21,6 +21,8 @@ Deno.serve(async (req) => {
 
     const auth = req.headers.get("Authorization") ?? "";
     const userClient = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: auth } } });
+    const { data: _u } = await userClient.auth.getUser();
+    const uid = _u?.user?.id ?? null;
     const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
     const { data: sol } = await userClient.from("solicitacoes").select("*, tipos_ato(*)").eq("id", solicitacaoId).maybeSingle();
@@ -77,8 +79,9 @@ Deno.serve(async (req) => {
     await admin.from("triagem").insert({ solicitacao_id: solicitacaoId, resultado: { prequalificacao_registral: resultado } });
     await admin.rpc("registrar_custodia", {
       p_solicitacao: solicitacaoId, p_minuta: null, p_acao: "prequalificacao_registral",
-      p_detalhe: { aptidao: base.aptidao, exigencias: base.itens.filter((i) => i.situacao !== "ok").length },
+      p_detalhe: { aptidao: base.aptidao, exigencias: base.itens.filter((i) => i.situacao !== "ok").length }, p_ator: uid ?? null,
     });
+    await gravarUso(userClient, "registro-prequalificar", (sol as any)?.cartorio_id ?? null, solicitacaoId);
 
     return json({ ok: true, ...resultado });
   } catch (e) {

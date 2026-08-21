@@ -11,9 +11,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { respostaErro } from "../_shared/erros.ts";
-import { callModel, callModelJson, sha256, PROVEDOR_ATIVO, MODELO_ATIVO } from "../_shared/artemis.ts";
+import { callModel, callModelJson, sha256, PROVEDOR_ATIVO, MODELO_ATIVO, gravarUso } from "../_shared/artemis.ts";
 
-import { espelharModelo, dicionarioDoAto } from "../_shared/espelho.ts";
+import { espelharModelo, dicionarioDoAto, inserirClausulas } from "../_shared/espelho.ts";
 
 async function contexto(admin: any, solicitacaoId: string) {
   const { data: sol } = await admin.from("solicitacoes")
@@ -62,6 +62,7 @@ ${mat ? JSON.stringify(mat).slice(0, 1500) : "(não lida)"}`;
   return {
     sol: s, bloco, blocoModelo, blocoClausulas, minuta,
     modeloFonte: m?.fonte ?? null,
+    clausulas: ((cls as any[]) ?? []).map((c: any) => ({ nome: c.nome, texto: c.texto })),
     modeloTexto: String(m?.texto ?? ""),
     partes: (partes as any[]) ?? [],
     docs: (docs as any[]) ?? [],
@@ -128,17 +129,41 @@ Responda APENAS com JSON:
 
       if (ctx.modeloTexto.trim()) {
         const pega = (t: string) => ctx.docs.filter((d: any) => d.tipo === t && d.extraido)[0]?.extraido ?? null;
-        const esp = espelharModelo(ctx.modeloTexto, dicionarioDoAto({
-          solicitacao: ctx.sol,
-          partes: ctx.partes,
-          imovel: pega("matricula") ?? ctx.sol?.dados,
-          contrato: pega("compromisso"),
-          empreendimento: ctx.sol?.empreendimentos,
-          cartorio: ctx.sol?.cartorios,
-        }));
+        const { data: cons } = await admin.rpc("consolidar_ato", { p_solicitacao: solicitacaoId });
+        const doPainel: Record<string, string> = {};
+        for (const [k, v] of Object.entries(((cons as any)?.campos ?? {}) as Record<string, any>)) {
+          if (v?.valor) doPainel[k] = String(v.valor);
+        }
+        // O painel da tela e a minuta leem a MESMA consolidação: sem isto, o
+        // escrevente confere um valor na tela e a escritura sai com outro.
+        const esp = espelharModelo(ctx.modeloTexto, {
+          ...dicionarioDoAto({
+            solicitacao: ctx.sol, partes: ctx.partes,
+            imovel: pega("matricula") ?? ctx.sol?.dados,
+            contrato: pega("compromisso"),
+            empreendimento: ctx.sol?.empreendimentos, cartorio: ctx.sol?.cartorios,
+          }),
+          ...doPainel,
+        });
         texto = esp.texto;
         origemTexto = "espelho_modelo";
         pendencias = esp.pendentes;
+
+        // Mesma correção do artemis-compile: com espelho, a instrução de
+        // cláusulas no prompt não produz efeito no documento final.
+        const clsEsp = (ctx.clausulas ?? []).map((c: any) => ({ nome: c.nome, texto: c.texto }));
+        if (clsEsp.length) {
+          const ins = inserirClausulas(texto, clsEsp);
+          texto = ins.texto;
+          r.alertas = [
+            ...(Array.isArray(r.alertas) ? r.alertas : []),
+            { item: `${ins.inseridas} cláusula(s) especial(is) inserida(s)`,
+              status: ins.posicao === "marcador" ? "ok" : "atencao",
+              fundamento: ins.posicao === "final"
+                ? "Anexadas ao final por falta de marcador e de fecho reconhecível. REPOSICIONE antes de aprovar."
+                : "Confira a posição e a numeração no documento." },
+          ];
+        }
         r.placeholders = [
           ...(Array.isArray(r.placeholders) ? r.placeholders : []),
           ...esp.pendentes.map((x) => x.rotulo),
@@ -158,8 +183,9 @@ Responda APENAS com JSON:
       await admin.rpc("registrar_custodia", {
         p_solicitacao: solicitacaoId, p_minuta: (nova as any)?.id ?? null,
         p_acao: "minuta_recompilada",
-        p_detalhe: { versao, modelo_fonte: ctx.modeloFonte, clausulas: ctx.blocoClausulas ? true : false },
+        p_detalhe: { versao, modelo_fonte: ctx.modeloFonte, clausulas: ctx.blocoClausulas ? true : false }, p_ator: uid ?? null,
       });
+    await gravarUso(admin, "minuta-assistente", (ctx.sol as any)?.cartorio_id ?? null, solicitacaoId);
 
       return json({
         ok: true, versao: (nova as any)?.versao ?? versao, minuta: texto,
@@ -225,7 +251,7 @@ Analise as ressalvas e proponha os ajustes.`;
 
       await admin.rpc("registrar_custodia", {
         p_solicitacao: solicitacaoId, p_minuta: ctx.minuta.id, p_acao: "ressalvas_analisadas",
-        p_detalhe: { ajustes: (r.ajustes ?? []).length, objecoes: (r.objecoes ?? []).length },
+        p_detalhe: { ajustes: (r.ajustes ?? []).length, objecoes: (r.objecoes ?? []).length }, p_ator: uid ?? null,
       });
 
       return json({

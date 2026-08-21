@@ -3,7 +3,10 @@ import { dataCurta, dataHora } from '../lib/tempo'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { Layout, StatusBadge } from '../components/ui'
-import { processarMinuta } from '../lib/minutaEngine'
+import { processarMinuta, sha256 } from '../lib/minutaEngine'
+import { espelharModelo, inserirClausulas } from '../lib/espelho'
+import PainelDadosAto from '../components/PainelDadosAto'
+import { modeloAplicavel, dicionarioDoProtocolo, listarClausulasDoAto } from '../lib/modelo'
 import ArtemisPanel from '../components/ArtemisPanel'
 import DocumentosInstrucao from '../components/DocumentosInstrucao'
 import WorkflowCard from '../components/WorkflowCard'
@@ -38,6 +41,7 @@ const ACAO_LABEL: Record<string, string> = {
   cliente_devolveu: 'Cliente devolveu (LGPD aceita)',
   triagem_ia: 'Triagem por IA',
   documento_extraido: 'Documento lido pela IA',
+  registro_excluido: 'Registro excluído',
   dados_validados: 'Dados validados e aplicados',
   intake_externo: 'Onboarding externo (Artemis)',
   classificado: 'Complexidade classificada',
@@ -124,7 +128,7 @@ export default function SolicitacaoDetalhe() {
     setMinutaSel(lista[0] ?? null)
 
     const { data: cs } = await supabase
-      .from('custodia_log').select('*').eq('solicitacao_id', id).order('id', { ascending: false })
+      .rpc('custodia_da_solicitacao', { p_solicitacao: id })
     setCustodia((cs as CustodiaEntry[]) ?? [])
     try { setUploadsCliente(await listarUploadsCliente(id!)) } catch { /* ignore */ }
     try { setTriagem(await ultimaTriagem(id!)) } catch { /* ignore */ }
@@ -138,7 +142,38 @@ export default function SolicitacaoDetalhe() {
     if (!solic || !tipo) return
     setGerando(true); setErro(null)
     try {
-      const { conteudo, qualificacao, hash } = await processarMinuta(tipo, solic.dados, partes)
+      // A geração rápida também respeita o modelo: modelo do empreendimento >
+      // da construtora > padrão do acervo do cartório para o tipo de ato. Só
+      // cai no template genérico de `tipos_ato` quando nenhum deles existe.
+      const base = await modeloAplicavel(solic.id, solic.cartorio_id, tipo.slug)
+      let conteudo: string, qualificacao: any[], hash: string, origem = 'rapida', pend: any[] = []
+
+      if (base?.texto) {
+        const dic = await dicionarioDoProtocolo(solic, partes)
+        const esp = espelharModelo(base.texto, dic)
+        const cls = await listarClausulasDoAto(solic.id)
+        const ins = inserirClausulas(esp.texto, cls)
+        conteudo = ins.texto
+        pend = esp.pendentes
+        origem = 'espelho_modelo'
+        hash = await sha256(conteudo)
+        qualificacao = [
+          ...esp.pendentes.map(x => ({
+            item: `Campo do modelo não encontrado: ${x.rotulo}`, status: 'pendente',
+            fundamento: `Marcado no texto como [[**${x.rotulo}**]]. Preencha antes do PDF final.`,
+          })),
+          ...(ins.inseridas ? [{
+            item: `${ins.inseridas} cláusula(s) especial(is) inserida(s)`,
+            status: ins.posicao === 'marcador' ? 'ok' : 'atencao',
+            fundamento: ins.posicao === 'final'
+              ? 'Anexadas ao final por falta de marcador e de fecho reconhecível. Reposicione.'
+              : 'Confira a posição e a numeração.',
+          }] : []),
+        ]
+      } else {
+        const r = await processarMinuta(tipo, solic.dados, partes)
+        conteudo = r.conteudo; qualificacao = r.qualificacao; hash = r.hash
+      }
       const proxVersao = (minutas[0]?.versao ?? 0) + 1
       const { error } = await supabase.from('minutas').insert({
         solicitacao_id: solic.id,
@@ -147,6 +182,9 @@ export default function SolicitacaoDetalhe() {
         conteudo,
         hash,
         qualificacao,
+        origem,
+        modelo_fonte: base?.fonte ?? null,
+        pendencias: pend,
       })
       if (error) throw error
 
@@ -249,6 +287,8 @@ export default function SolicitacaoDetalhe() {
       )}
 
       <div id="p-partes" />
+      <PainelDadosAto solicitacaoId={solic.id} />
+
       {/* PASSO 2 — conferência das partes e dados do ato */}
       <div className="flex items-center gap-2 mb-2">
         <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-navy text-white text-xs font-bold">2</span>
@@ -523,6 +563,10 @@ export default function SolicitacaoDetalhe() {
               <li key={c.id} className="mb-5 ml-4">
                 <div className="absolute -left-1.5 w-3 h-3 rounded-full bg-brass border border-white" />
                 <div className="text-sm font-semibold text-navy">{ACAO_LABEL[c.acao] ?? c.acao}</div>
+                <div className="text-xs text-ink/70">
+                  {(c as any).ator_nome ?? 'Sistema'}
+                  {(c as any).ator_papel && <span className="text-ink/40"> · {(c as any).ator_papel}</span>}
+                </div>
                 <div className="text-xs text-ink/50">
                   {dataHora(new Date(c.created_at))}
                   {c.detalhe?.de && c.detalhe?.para &&

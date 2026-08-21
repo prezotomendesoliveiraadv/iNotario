@@ -1,5 +1,149 @@
 # Changelog
 
+## 2026-08-26 — Painel consolidado de dados do ato; certidões lidas por IA
+
+### Adicionado
+
+**Painel de dados do ato (itens 2 e 3).** Novo card no topo do ato, alimentado
+por `consolidar_ato` — **função do banco, não módulo do front**. A razão é
+direta: o painel e o dicionário que preenche a minuta precisam enxergar os
+mesmos valores. Com a regra em dois lugares, mais cedo ou mais tarde a tela
+mostraria um dado e a escritura sairia com outro, e ninguém notaria até a
+assinatura. A geração rápida, o `artemis-compile` e o `minuta-assistente` agora
+leem a mesma função.
+
+Precedência implementada:
+
+| Grupo | Fonte que vence | Perde para ela |
+| --- | --- | --- |
+| Partes (identidade) | RG / CNH | contrato |
+| Objeto (imóvel) | matrícula | contrato |
+| Negócio (pagamento) | contrato | — |
+
+**Divergência adota e registra, não trava.** Quando o RG diz um nome e o
+contrato outro, o painel fica com o RG, mostra o conflito num bloco âmbar acima
+dos campos e segue. Travar pararia o ato por diferença de grafia; quem decide é
+o escrevente, mas ele precisa ver.
+
+A comparação normaliza acento, caixa e pontuação — "José da Silva" e "JOSE DA
+SILVA" não geram divergência falsa.
+
+**Prazo de 30 dias da matrícula.** A extração passou a capturar `emitida_em` (a
+data de expedição, com instrução explícita para não confundir com abertura da
+matrícula ou último registro). O painel mostra dias restantes e sinaliza
+vencida / vence em breve / sem data.
+
+**Vínculo explícito do documento ao ato.** Nova coluna `documentos.vinculado`,
+com caixa de seleção na tela. Leitura por IA é insumo; vínculo é decisão
+humana — **só documento vinculado entra no painel e na minuta**. Documentos já
+validados foram marcados como vinculados na migration.
+
+**Certidões (item 1).** Nova ação `certidao_construtora` no `artemis-extract`,
+com botão "ler (IA)" em cada certidão do cadastro. Extrai tipo, número, órgão,
+emissão, validade (calculando a partir do prazo em dias quando a certidão só o
+informa) e resultado. **Só preenche campo em branco** — dado conferido por
+pessoa não é sobrescrito por leitura automática.
+
+O painel reúne as certidões do ato e as do empreendimento numa lista só, cada
+uma com validade e situação. O tipo `certidao` entrou no portal público, para o
+caso que não é venda de construtora.
+
+**Inventário do que falta.** O painel lista o que impede completar: contrato
+ausente, matrícula ausente ou sem data de expedição, falta de RG/CNH, ausência
+de certidões, certidão vencida, matrícula vencida — cada item com o motivo em
+uma frase, não só o nome do campo.
+
+### Migration
+
+`supabase/painel_consolidado.sql` — **19ª**, depois de `custodia_autoria.sql`.
+
+### Republicar
+
+`artemis-extract`, `artemis-compile`, `minuta-assistente`.
+
+### Ponto de atenção
+
+`unaccent_simples` é uma tradução de caracteres feita à mão, não a extensão
+`unaccent` do Postgres. Cobre o português; se aparecer nome com caractere fora
+disso, a comparação pode gerar divergência falsa.
+
+---
+
+## 2026-08-20 — Cláusulas especiais no espelho; autoria na custódia; geração rápida com modelo; preços editáveis
+
+### Corrigido
+
+**Cláusulas especiais sumiam das minutas de construtora (item 6).** Regressão
+introduzida junto com o espelho, em 13/08. As cláusulas eram passadas ao modelo
+de linguagem como instrução ("incorpore cada uma como cláusula própria") — mas
+quando há modelo cadastrado, a saída do LLM é descartada e o texto vem do
+espelho. A instrução deixou de ter efeito e as cláusulas desapareciam em
+silêncio, justamente nas minutas que mais dependem delas.
+
+Agora a inserção é determinística (`inserirClausulas`): procura um marcador no
+modelo (`[[CLÁUSULAS ESPECIAIS]]`), senão insere antes do fecho, senão anexa ao
+final — e em cada caso registra no parecer onde entrou e se precisa
+reposicionamento.
+
+**A custódia não sabia quem agiu nas ações de IA (item 5).** `ator_id` existia e
+a função gravava `auth.uid()` — mas toda ação de IA é registrada por Edge
+Function sob service role, onde `auth.uid()` é NULL. Leitura de documento,
+minuta, triagem, consulta jurídica e pré-qualificação ficavam sem autor.
+
+`registrar_custodia` passou a aceitar `p_ator`; as seis funções resolvem o
+usuário autenticado e o repassam. O ator entra no payload do hash — autoria
+dentro da cadeia, não ao lado. A tela passou a exibir nome e papel.
+Novos gatilhos registram **exclusão** de partes e de documentos, que antes não
+deixavam rastro nenhum.
+
+**Geração rápida ignorava o modelo da construtora (item 4a).** Ela roda no
+navegador a partir de `tipos_ato.template` e nunca consultava
+`modelo_para_solicitacao`. Passou a resolver: empreendimento > construtora >
+padrão do acervo do cartório para o tipo de ato > template genérico. O motor de
+espelho foi portado para `src/lib/espelho.ts` — **é cópia sincronizada** de
+`_shared/espelho.ts`, e há aviso no cabeçalho dos dois.
+
+Nova função `modelo_do_acervo(cartorio, tipo_slug)`: sem empreendimento
+vinculado, `modelo_para_solicitacao` não alcançava o acervo. É o caminho do ato
+que não é venda de construtora.
+
+**Tabela de preços parecia zerada e sem edição (item 4b).** Três defeitos
+somados: o erro de carga era engolido por um `catch {}` vazio (a tela mostrava
+zeros porque a consulta falhara, não porque o preço fosse zero); os valores
+apareciam como *placeholder* e não como conteúdo; e `.filter("cartorio_id",
+"is", null)` serializa mal no postgrest-js — trocado por `.is()`.
+
+Agora: valores editáveis visíveis, botão de salvar explícito por linha, botão
+para remover a exceção do cartório, validação de valor e o erro de carga na
+tela com a pergunta certa ("a 17ª migration já foi executada?").
+
+### Adicionado
+
+**Medição real de tokens.** `registrarUso` captura o consumo devolvido pelo
+provedor em cada chamada (Gemini e Anthropic) e `gravarUso` persiste por
+função, cartório e protocolo. Novo painel **Custo de IA (tokens)** na Admin da
+plataforma, com RLS restrita a `admin_plataforma` — é custo do fornecedor, não
+do cartório. Preço do provedor editável em `precos_ia`.
+
+Isso substitui a estimativa por medição, que é o que sustenta a cláusula de
+reajuste por custo de IA.
+
+### Migration
+
+`supabase/custodia_autoria.sql` — **18ª**, depois de `faturamento_uso.sql`.
+
+### Republicar
+
+`artemis-compile`, `artemis-extract`, `artemis-intake`, `consulta-juridica`,
+`minuta-assistente`, `registro-prequalificar`, `admin-plataforma`.
+
+### Não entregue nesta rodada
+
+Itens 1, 2 e 3 (extração de certidões, painel consolidado de dados do ato com
+precedência entre fontes, e indicação do que falta). Ver a conversa.
+
+---
+
 ## 2026-08-13 (b) — Contrato social lido por IA; CNPJ validado; faturamento por evento
 
 ### Adicionado

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import {
   listarDocumentos, uploadDocumento, extrairDocumento, marcarValidado, urlDocumento,
-  confrontarComMatricula,
+  confrontarComMatricula, vincularDocumento,
   TIPOS_DOC_INSTRUCAO, type Documento, type TipoDocInstrucao, type Confronto,
 } from '../lib/documentos'
 import type { Solicitacao, Parte, TipoAto } from '../lib/types'
@@ -20,6 +20,13 @@ export default function DocumentosInstrucao({
   const [enviando, setEnviando] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [confrontos, setConfrontos] = useState<Record<string, Confronto>>({})
+
+  async function alternarVinculo(d: Documento) {
+    setBusy(d.id); setErro(null)
+    try { await vincularDocumento(d.id, !d.vinculado); await carregar() }
+    catch (e: any) { setErro(e.message ?? 'Falha ao vincular.') }
+    finally { setBusy(null) }
+  }
   const [erro, setErro] = useState<string | null>(null)
   const [edit, setEdit] = useState<Record<string, any>>({})
   const [papelSel, setPapelSel] = useState<Record<string, string>>({})
@@ -193,6 +200,15 @@ export default function DocumentosInstrucao({
                   ) : (
                     <pre className="text-xs whitespace-pre-wrap">{JSON.stringify(edit[d.id], null, 2)}</pre>
                   )}
+
+                  <label className="flex items-center gap-2 mt-3 text-xs cursor-pointer">
+                    <input type="checkbox" checked={Boolean(d.vinculado)} disabled={busy === d.id}
+                      onChange={() => alternarVinculo(d)} />
+                    <span>
+                      Vincular ao ato
+                      <span className="text-ink/50"> — só documento vinculado entra no painel de dados e na minuta.</span>
+                    </span>
+                  </label>
                 </div>
               )}
             </div>

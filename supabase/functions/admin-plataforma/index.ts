@@ -6,7 +6,8 @@
 //   "usuario_master"  { cartorioId, email, senha, nome }  (cria/reseta o login master)
 //   "gerar_fatura"    { cartorioId, competencia:"AAAA-MM" }
 //   "extrato"         { cartorioId, competencia }
-//   "salvar_preco"    { item, valorUnitario, cartorioId|null }
+//   "salvar_preco"    { item, valorUnitario|null, cartorioId|null }
+//   "custo_ia"        { cartorioId, competencia }
 //   "marcar_paga"     { faturaId }
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
@@ -145,21 +146,44 @@ Deno.serve(async (req) => {
       if (!validos.includes(item)) return json({ error: "Item de cobrança desconhecido." }, 400);
 
       const alvo = body.cartorioId ?? null;
-      const { data: existente } = await admin.from("precos").select("id")
-        .eq("item", item)
-        .filter("cartorio_id", alvo ? "eq" : "is", alvo ?? null)
-        .maybeSingle();
+
+      // `.filter(col, "is", null)` serializa o null de forma inconsistente no
+      // postgrest-js; `.is()` é o caminho suportado para a linha padrão.
+      let q = admin.from("precos").select("id").eq("item", item);
+      q = alvo ? q.eq("cartorio_id", alvo) : q.is("cartorio_id", null);
+      const { data: existente, error: eSel } = await q.maybeSingle();
+      if (eSel) throw eSel;
+
+      // valorUnitario nulo remove a exceção do cartório (volta a herdar).
+      if (body.valorUnitario === null || body.valorUnitario === undefined) {
+        if (!alvo) return json({ error: "O preço padrão não pode ser removido — defina zero." }, 400);
+        if (existente) {
+          const { error } = await admin.from("precos").delete().eq("id", (existente as any).id);
+          if (error) throw error;
+        }
+        return json({ ok: true, removido: true });
+      }
+
+      const valor = Number(String(body.valorUnitario).replace(",", "."));
+      if (!Number.isFinite(valor) || valor < 0) return json({ error: "Valor inválido." }, 400);
 
       const row = {
-        cartorio_id: alvo, item,
-        valor_unitario: Number(body.valorUnitario ?? 0),
+        cartorio_id: alvo, item, valor_unitario: valor,
         ativo: true, atualizado_em: new Date().toISOString(),
       };
       const { error } = existente
         ? await admin.from("precos").update(row).eq("id", (existente as any).id)
         : await admin.from("precos").insert(row);
       if (error) throw error;
-      return json({ ok: true });
+      return json({ ok: true, valor });
+    }
+
+    if (action === "custo_ia") {
+      const { data, error } = await admin.rpc("custo_ia_periodo", {
+        p_cartorio: body.cartorioId, p_competencia: body.competencia,
+      });
+      if (error) throw error;
+      return json({ ok: true, custo: data });
     }
 
     if (action === "marcar_paga") {

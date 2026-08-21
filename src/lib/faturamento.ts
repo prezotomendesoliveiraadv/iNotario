@@ -151,5 +151,16 @@ export async function listarPrecos(cartorioId?: string | null): Promise<Preco[]>
   return (data as Preco[]) ?? []
 }
 
-export const adminSalvarPreco = (item: string, valorUnitario: number, cartorioId?: string | null) =>
+export const adminSalvarPreco = (item: string, valorUnitario: number | null, cartorioId?: string | null) =>
   adminCall('salvar_preco', { item, valorUnitario, cartorioId: cartorioId ?? null })
+
+/** Custo estimado de IA do cartório no período — só a plataforma enxerga. */
+export interface CustoIA {
+  competencia: string
+  linhas: { funcao: string; modelo: string; ent: number; sai: number; brl: number }[]
+  tokens_entrada: number
+  tokens_saida: number
+  custo_brl: number
+}
+export const adminCustoIA = (cartorioId: string, competencia: string): Promise<{ custo: CustoIA }> =>
+  adminCall('custo_ia', { cartorioId, competencia })

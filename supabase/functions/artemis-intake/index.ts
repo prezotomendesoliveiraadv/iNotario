@@ -8,7 +8,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { respostaErro } from "../_shared/erros.ts";
-import { callModel, extrairJson, type Msg } from "../_shared/artemis.ts";
+import { callModel, extrairJson, type Msg, gravarUso } from "../_shared/artemis.ts";
 import { criarCofre, type Entidade } from "../_shared/tokenizer.ts";
 import { analisarMatricula } from "../_shared/matricula.ts";
 
@@ -38,6 +38,10 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!,
       { global: { headers: { Authorization: authHeader } } },
     );
+    // Autor real da ação: sob service role auth.uid() é nulo, então o ator
+    // precisa ser resolvido aqui e passado explicitamente à custódia.
+    const { data: _u } = await userClient.auth.getUser();
+    const uid = _u?.user?.id ?? null;
     const admin = createClient(
       Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
@@ -171,8 +175,9 @@ Considere os ônus da matrícula e a continuidade registral (titularidade) na pr
     }
     await admin.rpc("registrar_custodia", {
       p_solicitacao: solicitacaoId, p_minuta: null, p_acao: "triagem_ia",
-      p_detalhe: { docs: (uploads ?? []).length, acervo: (acervo ?? []).length, tokens: cofre.tamanho },
+      p_detalhe: { docs: (uploads ?? []).length, acervo: (acervo ?? []).length, tokens: cofre.tamanho }, p_ator: uid ?? null,
     });
+    await gravarUso(admin, "artemis-intake", (sol as any)?.cartorio_id ?? null, solicitacaoId);
 
     return json({ ok: true, resultado: result, vencimentos: venc ?? [], vencimentos_criticos: criticos.length });
   } catch (e) {

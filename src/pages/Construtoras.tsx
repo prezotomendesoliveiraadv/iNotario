@@ -15,6 +15,7 @@ import {
   type LeituraContratoSocial,
 } from '../lib/incorporacao'
 import { mascaraCnpj, erroCnpj } from '../lib/cnpj'
+import { lerCertidaoConstrutora } from '../lib/documentos'
 import ContratoSocialCard from '../components/ContratoSocialCard'
 
 const vazioRep = (): Partial<Representante> => ({
@@ -41,6 +42,16 @@ export default function Construtoras() {
   const [emprs, setEmprs] = useState<Empreendimento[]>([])
   const [novoRep, setNovoRep] = useState<Partial<Representante> | null>(null)
   const [novaCert, setNovaCert] = useState<Partial<Certidao> | null>(null)
+  const [lendoCert, setLendoCert] = useState<string | null>(null)
+
+  // Lê número, emissão e validade direto do PDF. Só preenche o que estiver em
+  // branco: dado já conferido por pessoa não é sobrescrito por leitura da IA.
+  async function lerCertidao(id: string) {
+    setLendoCert(id); setErro(null)
+    try { await lerCertidaoConstrutora(id); setCerts(await listarCertidoes(sel!.id)) }
+    catch (e: any) { setErro(e.message ?? 'Falha ao ler a certidão.') }
+    finally { setLendoCert(null) }
+  }
   const [novoEmpr, setNovoEmpr] = useState<Partial<Empreendimento> | null>(null)
   const [acessos, setAcessos] = useState<UsuarioConstrutora[]>([])
   const [novoAcesso, setNovoAcesso] = useState<{ nome: string; email: string; papel: 'juridico' | 'gestor' } | null>(null)
@@ -295,7 +306,16 @@ export default function Construtoras() {
                         até {dataCurta(new Date(c.validade + 'T12:00:00'))} · {st?.txt}
                       </span>
                     )}
+                    {(c as any).resultado && (
+                      <span className="block text-[11px] text-ink/50">resultado: {(c as any).resultado}</span>
+                    )}
                   </span>
+                  {(c as any).storage_path && (
+                    <button className="btn-ghost shrink-0" style={{ padding: '.15rem .5rem', fontSize: '.7rem' }}
+                      onClick={() => lerCertidao(c.id!)} disabled={lendoCert === c.id}>
+                      {lendoCert === c.id ? 'lendo…' : (c as any).lido_em ? 'reler (IA)' : 'ler (IA)'}
+                    </button>
+                  )}
                   <button className="text-ink/35 hover:text-red-600 text-lg leading-none px-1"
                     onClick={async () => { await removerCertidao(c.id!); setCerts(await listarCertidoes(sel.id)) }}>×</button>
                 </div>

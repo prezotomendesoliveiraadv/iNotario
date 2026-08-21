@@ -6,7 +6,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { corsHeaders, json } from "../_shared/cors.ts";
 import { respostaErro } from "../_shared/erros.ts";
-import { callModel, callModelVision, PROVEDOR_ATIVO, MODELO_ATIVO } from "../_shared/artemis.ts";
+import { callModel, callModelVision, PROVEDOR_ATIVO, MODELO_ATIVO, gravarUso } from "../_shared/artemis.ts";
 
 const SYSTEM = `Você é Artemis, especialista em qualificação notarial. Leia o documento fornecido e extraia EXATAMENTE os dados solicitados. Não invente: se um campo estiver ilegível ou ausente, retorne string vazia. Não normalize além do necessário. Responda SOMENTE com JSON válido, sem texto fora do JSON e sem cercas de código.`;
 
@@ -18,8 +18,12 @@ function instrucao(tipo: string): string {
   if (tipo === "matricula") {
     return `Matrícula de imóvel do Registro de Imóveis. Extraia e responda SOMENTE com:
 { "imovel_matricula":"", "imovel_cartorio_ri":"", "imovel_descricao":"", "proprietarios":[""], "area":"",
+  "imovel_endereco":"", "emitida_em":"AAAA-MM-DD",
   "onus":[ {"tipo":"", "detalhe":""} ], "ha_indisponibilidade": false }
-Em "onus", liste TODAS as averbações de ônus, gravames ou restrições que aparentem estar ATIVAS na matrícula: hipoteca, penhora, arresto, sequestro, indisponibilidade, alienação fiduciária, usufruto, servidão, cláusula de inalienabilidade/impenhorabilidade/incomunicabilidade, bem de família, ação reipersecutória e averbação premonitória de execução. Se não houver nenhuma, retorne lista vazia. Não invente.`;
+Em "onus", liste TODAS as averbações de ônus, gravames ou restrições que aparentem estar ATIVAS na matrícula: hipoteca, penhora, arresto, sequestro, indisponibilidade, alienação fiduciária, usufruto, servidão, cláusula de inalienabilidade/impenhorabilidade/incomunicabilidade, bem de família, ação reipersecutória e averbação premonitória de execução. Se não houver nenhuma, retorne lista vazia. Não invente.
+"emitida_em" é a data de EXPEDIÇÃO da certidão de matrícula (o carimbo/rodapé do cartório de registro), não a data
+de abertura da matrícula nem a do último registro. Formato AAAA-MM-DD. Se não constar, deixe "" — é melhor vazio do
+que uma data errada, porque este campo controla o prazo de 30 dias.`;
   }
   if (tipo === "certidao") {
     return `Certidão (negativa de débitos, ônus reais, distribuidor, trabalhista, FGTS, etc.).
@@ -81,6 +85,49 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const { documentoId } = body;
     const acao = String(body.acao ?? "extrair");
+
+    const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+    if (acao === "certidao_construtora") {
+      // Certidão do cadastro do empreendimento/construtora. Fica no bucket
+      // `construtoras`, não em `documentos` — é do cadastro, não do protocolo.
+      const certidaoId = String(body.certidaoId ?? "");
+      if (!certidaoId) return json({ error: "certidaoId é obrigatório." }, 400);
+
+      const { data: cert, error: eC } = await userClient
+        .from("construtora_certidoes").select("*").eq("id", certidaoId).maybeSingle();
+      if (eC || !cert) return json({ error: "Certidão não encontrada ou sem acesso." }, 404);
+      const c = cert as any;
+      if (!c.storage_path) return json({ error: "Anexe o arquivo da certidão antes de mandar ler." }, 400);
+
+      const { data: blobC, error: eB } = await admin.storage.from("construtoras").download(c.storage_path);
+      if (eB || !blobC) return json({ error: "Falha ao ler o arquivo no storage." }, 500);
+      const bytesC = new Uint8Array(await blobC.arrayBuffer());
+
+      const raw = await callModelVision(
+        SYSTEM, instrucao("certidao"),
+        [{ mime: blobC.type || "application/pdf", data: bytesToBase64(bytesC) }], 1200,
+      );
+      let lido: any;
+      try { lido = parseJson(raw); } catch { return json({ error: "Não foi possível interpretar a certidão." }, 502); }
+
+      const dt = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v ?? "")) ? String(v) : null);
+      await admin.from("construtora_certidoes").update({
+        extraido: lido,
+        // Só sobrescreve o que estava em branco: dado conferido por pessoa não
+        // é substituído por leitura automática.
+        numero: c.numero || lido.numero || null,
+        emitida_em: c.emitida_em || dt(lido.emitida_em),
+        validade: c.validade || dt(lido.validade),
+        tipo: c.tipo || lido.certidao_tipo || "certidão",
+        resultado: lido.resultado ?? null,
+        lido_em: new Date().toISOString(),
+      }).eq("id", certidaoId);
+
+      await gravarUso(admin, "artemis-extract", null, null);
+      return json({ ok: true, leitura: lido });
+    }
+
     if (acao !== "contrato_social" && !documentoId) {
       return json({ error: "documentoId é obrigatório" }, 400);
     }
@@ -90,9 +137,10 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!,
       { global: { headers: { Authorization: authHeader } } },
     );
-    const admin = createClient(
-      Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    );
+    // Autor real da ação: sob service role auth.uid() é nulo, então o ator
+    // precisa ser resolvido aqui e passado explicitamente à custódia.
+    const { data: _u } = await userClient.auth.getUser();
+    const uid = _u?.user?.id ?? null;
 
     // ---- contrato social da construtora: representantes e poderes ----
     // Lê o arquivo do cadastro (bucket `construtoras`), não da tabela
@@ -227,8 +275,9 @@ houver ônus ou divergência de descrição; "apto" quando nada disso ocorrer. N
       await admin.from("documentos").update({ confronto: conf }).eq("id", documentoId);
       await admin.rpc("registrar_custodia", {
         p_solicitacao: solicitacaoId, p_minuta: null, p_acao: "documento_extraido",
-        p_detalhe: { tipo: "confronto_contrato_matricula", veredito: conf.veredito, modelo: MODELO_ATIVO },
+        p_detalhe: { tipo: "confronto_contrato_matricula", veredito: conf.veredito, modelo: MODELO_ATIVO }, p_ator: uid ?? null,
       });
+      await gravarUso(admin, "artemis-extract", null, solicitacaoId);
       return json({ ok: true, confronto: conf });
     }
 
@@ -270,8 +319,9 @@ houver ônus ou divergência de descrição; "apto" quando nada disso ocorrer. N
     await admin.from("documentos").update(patch).eq("id", documentoId);
     await admin.rpc("registrar_custodia", {
       p_solicitacao: (doc as any).solicitacao_id, p_minuta: null, p_acao: "documento_extraido",
-      p_detalhe: { tipo, modelo: MODELO_ATIVO, provedor: PROVEDOR_ATIVO, pseudonimizado: false },
+      p_detalhe: { tipo, modelo: MODELO_ATIVO, provedor: PROVEDOR_ATIVO, pseudonimizado: false }, p_ator: uid ?? null,
     });
+    await gravarUso(admin, "artemis-extract", null, (doc as any)?.solicitacao_id ?? null);
 
     return json({ ok: true, tipo, extraido });
   } catch (e) {

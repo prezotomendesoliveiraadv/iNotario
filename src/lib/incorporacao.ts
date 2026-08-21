@@ -76,6 +76,9 @@ export interface Certidao {
   storage_path: string | null
   nome_arquivo: string | null
   observacao: string | null
+  extraido?: Record<string, any> | null
+  resultado?: string | null
+  lido_em?: string | null
 }
 
 export interface Empreendimento {

@@ -1,4 +1,12 @@
 // ============================================================================
+// ⚠️ ESTE ARQUIVO É ESPELHO DE supabase/functions/_shared/espelho.ts
+// Mantenha os dois em sincronia. O front (geração rápida) e as Edge Functions
+// (Artemis) precisam produzir EXATAMENTE o mesmo texto a partir do mesmo
+// modelo — se divergirem, o cartório recebe minutas diferentes conforme o
+// botão que apertou, que é o pior defeito possível aqui.
+// ============================================================================
+
+// ============================================================================
 // ESPELHO DO MODELO — preenchimento determinístico da minuta
 //
 // Quando o empreendimento ou a construtora tem modelo próprio, a minuta NÃO é

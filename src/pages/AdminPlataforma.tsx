@@ -3,8 +3,8 @@ import { dataCurta, dataHora } from '../lib/tempo'
 import { Layout } from '../components/ui'
 import {
   adminListar, adminSalvarPlano, adminUsuarioMaster, adminGerarFatura, adminExtrato, adminMarcarPaga,
-  adminSalvarPreco, listarPrecos, ITEM_ROTULO,
-  brl, competenciaAtual, type CartorioAdmin, type Plano, type Preco,
+  adminSalvarPreco, listarPrecos, adminCustoIA, ITEM_ROTULO,
+  brl, competenciaAtual, type CartorioAdmin, type Plano, type Preco, type CustoIA,
 } from '../lib/faturamento'
 
 export default function AdminPlataforma() {
@@ -102,6 +102,7 @@ export default function AdminPlataforma() {
             </div>
 
             <TabelaPrecos cartorioId={sel.id} onSalvo={carregar} />
+            <CustoTokens cartorioId={sel.id} />
 
             <div className="card p-5">
               <h2 className="font-semibold text-navy mb-1">Login master do cartório</h2>
@@ -179,7 +180,13 @@ function TabelaPrecos({ cartorioId, onSalvo }: { cartorioId: string; onSalvo: ()
   const [msg, setMsg] = useState<string | null>(null)
 
   async function carregar() {
-    try { setPrecos(await listarPrecos(cartorioId)) } catch { /* a tela segue utilizável sem isto */ }
+    try { setPrecos(await listarPrecos(cartorioId)); setMsg(null) }
+    catch (e: any) {
+      // Engolir este erro foi o que fez a tabela parecer "zerada e sem edição":
+      // a tela mostrava zeros porque a carga tinha falhado, não porque os
+      // preços fossem zero.
+      setMsg(`Não foi possível carregar os preços: ${e.message ?? e}. A 17ª migration já foi executada?`)
+    }
   }
   useEffect(() => { carregar() }, [cartorioId])
 
@@ -189,7 +196,9 @@ function TabelaPrecos({ cartorioId, onSalvo }: { cartorioId: string; onSalvo: ()
   async function salvar(item: string, escopo: 'padrao' | 'cartorio') {
     const chave = `${escopo}:${item}`
     const bruto = rascunho[chave]
-    if (bruto === undefined || bruto === '') return
+    if (bruto === undefined) return
+    // Campo esvaziado na coluna do cartório significa "voltar a herdar".
+    if (bruto.trim() === '') { if (escopo === 'cartorio') return remover(item); return }
     setBusy(chave); setMsg(null)
     try {
       await adminSalvarPreco(item, Number(String(bruto).replace(',', '.')), escopo === 'cartorio' ? cartorioId : null)
@@ -197,6 +206,17 @@ function TabelaPrecos({ cartorioId, onSalvo }: { cartorioId: string; onSalvo: ()
       await carregar(); onSalvo()
       setMsg('Preço atualizado.')
     } catch (e: any) { setMsg(e.message ?? 'Falha ao salvar.') }
+    finally { setBusy(null) }
+  }
+
+  async function remover(item: string) {
+    const chave = `cartorio:${item}`
+    setBusy(chave); setMsg(null)
+    try {
+      await adminSalvarPreco(item, null, cartorioId)
+      setRascunho(r => { const n = { ...r }; delete n[chave]; return n })
+      await carregar(); onSalvo(); setMsg('Exceção removida — volta a herdar o padrão.')
+    } catch (e: any) { setMsg(e.message ?? 'Falha ao remover.') }
     finally { setBusy(null) }
   }
 
@@ -216,27 +236,34 @@ function TabelaPrecos({ cartorioId, onSalvo }: { cartorioId: string; onSalvo: ()
         </div>
         {Object.entries(ITEM_ROTULO).map(([item, rotulo]) => {
           const vp = padrao(item), vc = doCartorio(item)
+          const kp = `padrao:${item}`, kc = `cartorio:${item}`
+          const valP = rascunho[kp] ?? (vp ? String(vp.valor_unitario) : '0')
+          const valC = rascunho[kc] ?? (vc ? String(vc.valor_unitario) : '')
+          const sujoP = rascunho[kp] !== undefined && rascunho[kp] !== String(vp?.valor_unitario ?? '')
+          const sujoC = rascunho[kc] !== undefined && rascunho[kc] !== String(vc?.valor_unitario ?? '')
           return (
             <div key={item} className="flex items-center gap-2 px-3 py-1.5 border-t border-black/5">
               <span className="flex-1 text-xs">{rotulo}</span>
 
-              <div className="w-32 flex gap-1 justify-end">
-                <input className="input text-right" style={{ width: 78, padding: '.2rem .4rem', fontSize: '.75rem' }}
-                  placeholder={String(vp?.valor_unitario ?? 0)}
-                  value={rascunho[`padrao:${item}`] ?? ''}
-                  onChange={e => setRascunho(r => ({ ...r, [`padrao:${item}`]: e.target.value }))}
-                  onBlur={() => salvar(item, 'padrao')}
-                  disabled={busy === `padrao:${item}`} />
+              <div className="w-36 flex gap-1 justify-end items-center">
+                <input className="input text-right" style={{ width: 76, padding: '.2rem .4rem', fontSize: '.75rem' }}
+                  value={valP} inputMode="decimal"
+                  onChange={e => setRascunho(r => ({ ...r, [kp]: e.target.value }))} />
+                <button className="btn-primary" style={{ padding: '.15rem .45rem', fontSize: '.7rem', visibility: sujoP ? 'visible' : 'hidden' }}
+                  onClick={() => salvar(item, 'padrao')} disabled={busy === kp}>salvar</button>
               </div>
 
-              <div className="w-40 flex gap-1 justify-end items-center">
-                <input className="input text-right" style={{ width: 78, padding: '.2rem .4rem', fontSize: '.75rem' }}
-                  placeholder={vc ? String(vc.valor_unitario) : 'herda'}
-                  value={rascunho[`cartorio:${item}`] ?? ''}
-                  onChange={e => setRascunho(r => ({ ...r, [`cartorio:${item}`]: e.target.value }))}
-                  onBlur={() => salvar(item, 'cartorio')}
-                  disabled={busy === `cartorio:${item}`} />
-                {vc && <span className="badge bg-brass/15 text-[10px]">exceção</span>}
+              <div className="w-44 flex gap-1 justify-end items-center">
+                <input className="input text-right" style={{ width: 76, padding: '.2rem .4rem', fontSize: '.75rem' }}
+                  placeholder="herda" value={valC} inputMode="decimal"
+                  onChange={e => setRascunho(r => ({ ...r, [kc]: e.target.value }))} />
+                <button className="btn-primary" style={{ padding: '.15rem .45rem', fontSize: '.7rem', visibility: sujoC ? 'visible' : 'hidden' }}
+                  onClick={() => salvar(item, 'cartorio')} disabled={busy === kc}>salvar</button>
+                {vc && !sujoC && (
+                  <button className="btn-ghost" style={{ padding: '.15rem .45rem', fontSize: '.7rem' }}
+                    title="Remover a exceção e voltar a herdar o padrão"
+                    onClick={() => remover(item)} disabled={busy === kc}>↺</button>
+                )}
               </div>
             </div>
           )
@@ -244,6 +271,69 @@ function TabelaPrecos({ cartorioId, onSalvo }: { cartorioId: string; onSalvo: ()
       </div>
 
       {msg && <div className="text-xs text-ink/60 mt-2">{msg}</div>}
+    </div>
+  )
+}
+
+
+// ============================================================================
+// Custo de IA por cartório — visível apenas para a plataforma
+//
+// É o custo do FORNECEDOR (tokens consumidos), não a cobrança do cartório. Só
+// aparece aqui, e a tabela `uso_tokens` tem RLS restrita a admin_plataforma.
+// Margem = o que o cartório paga (demonstrativo) menos isto.
+// ============================================================================
+
+function CustoTokens({ cartorioId }: { cartorioId: string }) {
+  const [comp, setComp] = useState(competenciaAtual())
+  const [custo, setCusto] = useState<CustoIA | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [erro, setErro] = useState<string | null>(null)
+
+  async function carregar() {
+    setBusy(true); setErro(null)
+    try { setCusto((await adminCustoIA(cartorioId, comp)).custo) }
+    catch (e: any) { setErro(e.message ?? 'Falha ao apurar.') }
+    finally { setBusy(false) }
+  }
+  useEffect(() => { setCusto(null) }, [cartorioId, comp])
+
+  return (
+    <div className="card p-5">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h2 className="font-semibold text-navy">Custo de IA (tokens) — interno</h2>
+        <div className="flex gap-2">
+          <input className="input" style={{ width: 110 }} value={comp} onChange={e => setComp(e.target.value)} placeholder="AAAA-MM" />
+          <button className="btn-ghost" onClick={carregar} disabled={busy}>{busy ? 'Apurando…' : 'Apurar'}</button>
+        </div>
+      </div>
+      <p className="text-[11px] text-ink/50 mt-1">
+        Consumo medido nas chamadas ao provedor, a preço de lista. Não considera desconto de lote nem
+        economia de cache — é teto, não fatura.
+      </p>
+
+      {erro && <div className="text-sm text-red-600 mt-2">{erro}</div>}
+
+      {custo && (
+        <div className="mt-3">
+          <div className="flex gap-4 text-xs text-ink/60 mb-2">
+            <span>entrada: <b className="font-mono">{custo.tokens_entrada.toLocaleString('pt-BR')}</b></span>
+            <span>saída: <b className="font-mono">{custo.tokens_saida.toLocaleString('pt-BR')}</b></span>
+            <span>custo estimado: <b className="text-brass">{brl(custo.custo_brl)}</b></span>
+          </div>
+          <div className="border border-black/5 rounded-lg overflow-hidden">
+            {custo.linhas.map((l, i) => (
+              <div key={i} className="flex text-xs px-3 py-1.5 border-t border-black/5 first:border-t-0">
+                <span className="flex-1">{l.funcao}</span>
+                <span className="w-24 text-right font-mono text-ink/50">{l.ent.toLocaleString('pt-BR')}</span>
+                <span className="w-24 text-right font-mono text-ink/50">{l.sai.toLocaleString('pt-BR')}</span>
+                <span className="w-24 text-right font-mono">{brl(l.brl)}</span>
+              </div>
+            ))}
+            {!custo.linhas.length && <div className="text-xs text-ink/50 px-3 py-2">Sem consumo medido nesta competência.</div>}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

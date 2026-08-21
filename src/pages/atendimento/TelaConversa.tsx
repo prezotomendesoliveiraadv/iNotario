@@ -13,6 +13,7 @@ const DOC_TIPOS: { v: string; label: string }[] = [
   { v: 'cnh', label: 'CNH' },
   { v: 'matricula', label: 'Matrícula' },
   { v: 'compromisso', label: 'Contrato de compra e venda' },
+  { v: 'certidao', label: 'Certidão (negativa, ônus, trabalhista)' },
   { v: 'outro', label: 'Outro' },
 ]
 
