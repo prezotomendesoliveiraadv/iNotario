@@ -20,6 +20,13 @@
 -- comportamento antigo (auth.uid()), então as chamadas do front seguem iguais.
 -- O ator entra no payload do hash: a autoria fica dentro da cadeia, não ao lado.
 -- ----------------------------------------------------------------------------
+-- ATENÇÃO: `create or replace` com um parâmetro A MAIS não substitui a função —
+-- cria uma SOBRECARGA. Ficariam duas registrar_custodia (4 e 5 argumentos) e o
+-- PostgREST não conseguiria escolher entre elas numa chamada de 4 argumentos,
+-- devolvendo "function public.registrar_custodia is not unique" e derrubando a
+-- abertura de solicitação. A antiga precisa cair antes, pela assinatura exata.
+drop function if exists public.registrar_custodia(uuid, uuid, text, jsonb);
+
 create or replace function public.registrar_custodia(
   p_solicitacao uuid,
   p_minuta      uuid,

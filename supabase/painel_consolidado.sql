@@ -36,10 +36,6 @@ update public.documentos
  where validade_ate is null and extraido ? 'validade'
    and (extraido->>'validade') ~ '^\d{4}-\d{2}-\d{2}$';
 
-   set validade_ate = nullif(extraido->>'validade','')::date
- where validade_ate is null and extraido ? 'validade'
-   and (extraido->>'validade') ~ '^\d{4}-\d{2}-\d{2}$';
-
 -- Matrícula vale 30 dias contados da expedição (prazo de praxe registral;
 -- ajuste aqui se a comarca praticar outro).
 create or replace function public.validade_matricula(p_emitida date)

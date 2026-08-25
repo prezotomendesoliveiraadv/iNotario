@@ -33,4 +33,9 @@ select 'm19 · documentos.vinculado',
 union all
 select 'm19 · fn consolidar_ato',
        exists (select 1 from pg_proc where proname='consolidar_ato')
+union all
+-- Duas registrar_custodia = sobrecarga não removida: o PostgREST recusa a
+-- chamada com "is not unique" e a abertura de solicitação quebra.
+select 'sanidade · registrar_custodia única',
+       (select count(*) from pg_proc where proname='registrar_custodia') = 1
 order by 1;

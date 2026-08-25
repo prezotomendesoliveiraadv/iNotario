@@ -1,5 +1,70 @@
 # Changelog
 
+## 2026-08-25 (b) — Correção: sobrecarga de registrar_custodia quebrava a abertura de solicitação
+
+### Corrigido
+
+**`function public.registrar_custodia is not unique` (bug meu).** Na 18ª
+migration usei `create or replace function` para acrescentar o parâmetro
+`p_ator`. No PostgreSQL, mudar a lista de parâmetros **não substitui a função —
+cria uma sobrecarga**. O banco passou a ter duas: a antiga de 4 argumentos e a
+nova de 5 (com default no 5º).
+
+Numa chamada de 4 argumentos, as duas se encaixam. O PostgREST não consegue
+escolher, recusa com "is not unique", e a abertura de solicitação quebra — o
+front chama a custódia com 4 argumentos.
+
+`custodia_autoria.sql` passou a derrubar a versão antiga pela assinatura exata
+antes de criar a nova:
+
+```sql
+drop function if exists public.registrar_custodia(uuid, uuid, text, jsonb);
+```
+
+Em banco já migrado, rode só essa linha e um `notify pgrst, 'reload schema'`.
+
+Conferi as outras funções redefinidas nas migrations 15 a 19
+(`buscar_solicitacoes`, `modelo_para_solicitacao`): **as assinaturas são
+idênticas às originais**, então `create or replace` de fato substituiu e não há
+sobrecarga nesses casos. `registrar_custodia` era a única com parâmetro novo.
+
+### Diagnóstico
+
+`_diagnostico.sql` ganhou uma décima linha, de sanidade:
+`registrar_custodia única` — falsa quando a sobrecarga existe.
+
+---
+
+## 2026-08-25 — Mensagem de erro deixa de culpar a IA por erro de banco
+
+### Corrigido
+
+**Todo erro 500 aparecia como "instabilidade momentânea ao falar com a IA".**
+Incluindo os que não tinham relação alguma com o provedor — notadamente banco
+desatualizado, quando uma Edge Function nova chama função ou coluna que a
+migration ainda não criou. Isso mandou o diagnóstico para o lugar errado duas
+vezes em produção.
+
+`mensagemAmigavel` passa a classificar antes de traduzir:
+
+| Sinal no erro | Mensagem ao usuário |
+| --- | --- |
+| `schema cache`, `PGRST`, função/coluna inexistente | Banco desatualizado — migration pendente. Diz explicitamente que **nada foi enviado ao provedor**. |
+| `permission denied`, RLS | Falta de permissão do usuário. |
+| 429, quota, rate limit | Limite do provedor de IA. |
+| 401/403, api key | Chave do provedor ausente ou inválida. |
+| 5xx, timeout, fetch failed | Instabilidade do provedor (o caso original). |
+| sem classificação | Erro técnico visível, com o detalhe. Melhor que um palpite errado. |
+
+Erros abaixo de 500 continuam mostrando a mensagem original, como já era.
+
+### Republicar
+
+Todas as funções que importam `_shared/erros.ts` — na prática, as 15.
+Sem urgência: é melhoria de diagnóstico, não de comportamento.
+
+---
+
 ## 2026-08-21 — Correção: a 19ª migration não executava
 
 ### Corrigido

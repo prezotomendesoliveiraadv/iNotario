@@ -51,8 +51,46 @@ export async function respostaErro(
 ): Promise<Response> {
   const codigo = await registrarErro(contexto, e, { ...extra, status_http: status });
   const mensagem = (e as any)?.message ?? String(e);
-  const amigavel = status >= 500
-    ? "Tivemos uma instabilidade momentânea ao falar com a IA. Tente novamente em instantes."
-    : mensagem;
-  return json({ error: amigavel, detalhe: mensagem, codigo, contexto }, status);
+  return json({ error: mensagemAmigavel(mensagem, status), detalhe: mensagem, codigo, contexto }, status);
+}
+
+/**
+ * Traduz o erro sem mentir sobre a causa.
+ *
+ * A versão anterior chamava TODO erro 500 de "instabilidade ao falar com a IA".
+ * Um banco desatualizado — função ou coluna que a migration ainda não criou —
+ * aparecia como falha do provedor, e mandava quem depura procurar no lugar
+ * errado. Aconteceu duas vezes em produção.
+ */
+export function mensagemAmigavel(mensagem: string, status: number): string {
+  if (status < 500) return mensagem;
+  const m = (mensagem ?? "").toLowerCase();
+
+  // Banco atrás do código: PostgREST não acha função/coluna que a migration cria.
+  const bancoDesatualizado =
+    m.includes("schema cache") ||
+    m.includes("pgrst") ||
+    (m.includes("function") && (m.includes("does not exist") || m.includes("could not find"))) ||
+    (m.includes("column") && m.includes("does not exist")) ||
+    m.includes("relation") && m.includes("does not exist");
+  if (bancoDesatualizado) {
+    return "O banco de dados está desatualizado em relação a esta versão do sistema: "
+      + "há uma migration pendente. Avise o suporte com o código abaixo. "
+      + "(Não é falha da IA — nada foi enviado ao provedor.)";
+  }
+
+  if (m.includes("permission denied") || m.includes("row-level security") || m.includes("rls")) {
+    return "Seu usuário não tem permissão para esta operação. Fale com quem administra o cartório.";
+  }
+  if (m.includes("429") || m.includes("rate limit") || m.includes("quota") || m.includes("resource_exhausted")) {
+    return "O provedor de IA atingiu o limite de uso no momento. Tente de novo em alguns minutos.";
+  }
+  if (m.includes("401") || m.includes("403") || m.includes("api key") || m.includes("unauthorized")) {
+    return "A chave do provedor de IA está ausente ou inválida. Avise o suporte com o código abaixo.";
+  }
+  if (/\b5\d\d\b/.test(m) || m.includes("timeout") || m.includes("fetch failed") || m.includes("network")) {
+    return "Tivemos uma instabilidade momentânea ao falar com a IA. Tente novamente em instantes.";
+  }
+  // Sem classificação: melhor um erro técnico visível do que um palpite errado.
+  return `Não foi possível concluir. Avise o suporte com o código abaixo. Detalhe: ${mensagem}`;
 }
