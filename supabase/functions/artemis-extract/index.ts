@@ -86,6 +86,15 @@ Deno.serve(async (req) => {
     const { documentoId } = body;
     const acao = String(body.acao ?? "extrair");
 
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const userClient = createClient(
+      Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    // Autor real da ação: sob service role auth.uid() é nulo, então o ator
+    // precisa ser resolvido aqui e passado explicitamente à custódia.
+    const { data: _u } = await userClient.auth.getUser();
+    const uid = _u?.user?.id ?? null;
     const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
     if (acao === "certidao_construtora") {
@@ -132,15 +141,7 @@ Deno.serve(async (req) => {
       return json({ error: "documentoId é obrigatório" }, 400);
     }
 
-    const authHeader = req.headers.get("Authorization") ?? "";
-    const userClient = createClient(
-      Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!,
-      { global: { headers: { Authorization: authHeader } } },
-    );
-    // Autor real da ação: sob service role auth.uid() é nulo, então o ator
-    // precisa ser resolvido aqui e passado explicitamente à custódia.
-    const { data: _u } = await userClient.auth.getUser();
-    const uid = _u?.user?.id ?? null;
+
 
     // ---- contrato social da construtora: representantes e poderes ----
     // Lê o arquivo do cadastro (bucket `construtoras`), não da tabela

@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-08-21 — Correção: a 19ª migration não executava
+
+### Corrigido
+
+**`consolidar_ato` não era criada — a 19ª migration abortava (bug meu).** Na CTE
+que consolida o objeto, as colunas foram nomeadas `v_mat` e `v_con`, **os mesmos
+nomes das variáveis plpgsql** declaradas na função. Dentro de uma função
+plpgsql o Postgres substitui identificadores antes de planejar, e uma
+referência ambígua faz a criação da função inteira falhar. Colunas renomeadas
+para `da_mat` / `do_con`.
+
+Efeito colateral do mesmo problema: como a 19ª abortava, quem seguisse a ordem
+podia interromper a sequência e deixar a **18ª** também sem aplicar. Daí o
+segundo erro relatado: `artemis-extract` passou a chamar `registrar_custodia`
+com o parâmetro `p_ator`, que só existe a partir da 18ª. Sem ela, a chamada
+falha, a exceção sobe e o usuário vê "instabilidade momentânea ao falar com a
+IA" — mensagem que mascara um erro de banco, não do provedor.
+
+Outros dois defeitos corrigidos na mesma varredura:
+
+- `jsonb_object_agg` recebia `polo || '_' || ord` com `ord` bigint; agora
+  `ord::text`.
+- A validade da certidão não era calculada quando o documento informava só
+  `prazo_dias`. Agora é, a partir da data de emissão.
+
+**`userClient` usado antes da declaração em `artemis-extract`.** A ação
+`certidao_construtora` referenciava o cliente ~40 linhas acima do `const`,
+resultado de uma reordenação malfeita minha. Só quebrava naquele caminho, mas
+quebrava com certeza. Declarações movidas para o topo do handler.
+
+### Adicionado
+
+`supabase/_diagnostico.sql` — consulta que lista, peça por peça, o que já está
+aplicado no banco. Rode antes das migrations: "false" indica migration não
+executada **ou** executada com falha no meio, casos indistinguíveis pelo
+resultado. Em ambos, rode de novo (são idempotentes).
+
+### Republicar
+
+`artemis-extract`. E rodar novamente as migrations 18 e 19.
+
+---
+
 ## 2026-08-26 — Painel consolidado de dados do ato; certidões lidas por IA
 
 ### Adicionado

@@ -119,7 +119,7 @@ begin
   v_con := coalesce(v_con, '{}'::jsonb);
 
   -- ---------- OBJETO: matrícula vence o contrato ----------
-  with pares(campo, rotulo, v_mat, v_con) as (
+  with pares(campo, rotulo, da_mat, do_con) as (
     values
       ('imovel_matricula',   'Matrícula',            v_mat->>'imovel_matricula',   v_con->>'imovel_matricula'),
       ('imovel_cartorio_ri', 'Cartório de registro', v_mat->>'imovel_cartorio_ri', v_con->>'imovel_cartorio_ri'),
@@ -134,24 +134,26 @@ begin
   select
     coalesce(jsonb_object_agg(campo, jsonb_build_object(
       'rotulo', rotulo,
-      'valor',  coalesce(nullif(btrim(v_mat),''), nullif(btrim(v_con),'')),
-      'fonte',  case when nullif(btrim(v_mat),'') is not null then 'matricula'
-                     when nullif(btrim(v_con),'') is not null then 'contrato' end,
+      'valor',  coalesce(nullif(btrim(da_mat),''), nullif(btrim(do_con),'')),
+      'fonte',  case when nullif(btrim(da_mat),'') is not null then 'matricula'
+                     when nullif(btrim(do_con),'') is not null then 'contrato' end,
       'grupo',  'objeto'
-    )) filter (where coalesce(nullif(btrim(v_mat),''), nullif(btrim(v_con),'')) is not null), '{}'::jsonb),
+    )) filter (where coalesce(nullif(btrim(da_mat),''), nullif(btrim(do_con),'')) is not null), '{}'::jsonb),
     coalesce(jsonb_agg(jsonb_build_object(
       'campo', campo, 'rotulo', rotulo,
-      'adotado', btrim(v_mat), 'fonte_adotada', 'matricula',
-      'conflito', btrim(v_con), 'fonte_conflito', 'contrato'
-    )) filter (where nullif(btrim(v_mat),'') is not null and nullif(btrim(v_con),'') is not null
-                 and public.norm_txt(v_mat) is distinct from public.norm_txt(v_con)), '[]'::jsonb),
-    count(*) filter (where coalesce(nullif(btrim(v_mat),''), nullif(btrim(v_con),'')) is not null),
+      'adotado', btrim(da_mat), 'fonte_adotada', 'matricula',
+      'conflito', btrim(do_con), 'fonte_conflito', 'contrato'
+    )) filter (where nullif(btrim(da_mat),'') is not null and nullif(btrim(do_con),'') is not null
+                 and public.norm_txt(da_mat) is distinct from public.norm_txt(do_con)), '[]'::jsonb),
+    count(*) filter (where coalesce(nullif(btrim(da_mat),''), nullif(btrim(do_con),'')) is not null),
     count(*)
   into v_campos, v_diverg, v_preench, v_total
   from pares;
 
   -- ---------- NEGÓCIO: só o contrato ----------
-  with pares(campo, rotulo, v) as (
+  -- v_campos aparece dos dois lados: é lido antes de ser regravado, que é o
+  -- comportamento do SELECT ... INTO em plpgsql.
+  with pares(campo, rotulo, val) as (
     values
       ('valor_total',           'Valor total',           v_con->>'valor_total'),
       ('forma_pagamento',       'Forma de pagamento',    v_con->>'forma_pagamento'),
@@ -162,9 +164,9 @@ begin
       ('prazo_entrega',         'Prazo de entrega',      v_con->>'prazo_entrega')
   )
   select v_campos || coalesce(jsonb_object_agg(campo, jsonb_build_object(
-           'rotulo', rotulo, 'valor', btrim(v), 'fonte', 'contrato', 'grupo', 'negocio'
-         )) filter (where nullif(btrim(v),'') is not null), '{}'::jsonb),
-         v_preench + count(*) filter (where nullif(btrim(v),'') is not null),
+           'rotulo', rotulo, 'valor', btrim(val), 'fonte', 'contrato', 'grupo', 'negocio'
+         )) filter (where nullif(btrim(val),'') is not null), '{}'::jsonb),
+         v_preench + count(*) filter (where nullif(btrim(val),'') is not null),
          v_total + count(*)
   into v_campos, v_preench, v_total
   from pares;
@@ -190,7 +192,7 @@ begin
   )
   select
     v_campos || coalesce(jsonb_object_agg(
-      polo || '_' || ord, jsonb_build_object(
+      polo || '_' || ord::text, jsonb_build_object(
         'rotulo', initcap(polo),
         'valor',  coalesce(nullif(btrim(pessoal->>'nome'),''), btrim(contrato->>'nome')),
         'fonte',  case when nullif(btrim(pessoal->>'nome'),'') is not null then 'documento_pessoal' else 'contrato' end,
@@ -205,7 +207,7 @@ begin
         ))
       )), '{}'::jsonb),
     v_diverg || coalesce(jsonb_agg(jsonb_build_object(
-      'campo', polo || '_' || ord, 'rotulo', initcap(polo) || ' — nome',
+      'campo', polo || '_' || ord::text, 'rotulo', initcap(polo) || ' — nome',
       'adotado', btrim(pessoal->>'nome'), 'fonte_adotada', 'documento_pessoal',
       'conflito', btrim(contrato->>'nome'), 'fonte_conflito', 'contrato'
     )) filter (where nullif(btrim(pessoal->>'nome'),'') is not null
@@ -234,7 +236,11 @@ begin
   with doc_cert as (
     select coalesce(nullif(d.extraido->>'certidao_tipo',''), 'certidão') as tipo,
            d.extraido->>'numero' as numero,
-           d.emitida_em, d.validade_ate, d.extraido->>'resultado' as resultado,
+           d.emitida_em,
+           coalesce(d.validade_ate,
+                    case when d.emitida_em is not null and (d.extraido->>'prazo_dias') ~ '^[0-9]+$'
+                         then d.emitida_em + (d.extraido->>'prazo_dias')::int end) as validade_ate,
+           d.extraido->>'resultado' as resultado,
            'ato'::text as origem, d.nome_arquivo as arquivo
     from public.documentos d
     where d.solicitacao_id = p_solicitacao and d.tipo = 'certidao' and d.vinculado
