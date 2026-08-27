@@ -1,5 +1,87 @@
 # Changelog
 
+## 2026-08-25 (d) — v8.5: secret do cartório validado antes de ir ao banco
+
+### Corrigido
+
+**`invalid input syntax for type uuid: "UUID-DO-CARTORIO"` no atendimento
+público.** O secret `INTAKE_CARTORIO_ID` recebeu o texto do exemplo em vez do
+UUID real, e o valor seguia direto para a consulta. O Postgres recusava, e o
+erro cru aparecia na tela de quem estava tentando abrir uma escritura.
+
+`resolveCartorio` agora valida o formato antes de usar: apara espaços, remove
+chaves angulares e aspas coladas por engano, e confere contra o padrão UUID.
+Valor inválido registra aviso no log e **cai no fallback** (primeiro cartório da
+base) em vez de derrubar o atendimento. A mensagem de "não configurado" diz o
+que fazer, incluindo o aviso de não colar as chaves angulares.
+
+Um secret mal preenchido é erro de operação, não de quem está do outro lado da
+tela — e não deveria interromper o atendimento.
+
+**`DEPLOY.md` deixou de trazer um placeholder colável.** A linha era
+`INTAKE_CARTORIO_ID=<uuid-do-cartorio>`, que copiado e colado produz exatamente
+o erro acima. Virou um UUID de exemplo bem formado, com a consulta para obter o
+valor real logo acima.
+
+### Republicar
+
+`intake-publico`.
+
+---
+
+## 2026-08-25 (c) — v8.4: erro na compilação de minuta + verificador de build
+
+### Corrigido
+
+**`sol is not defined` ao compilar minuta.** Ao instrumentar a medição de
+tokens, escrevi `gravarUso(..., (sol as any)?.cartorio_id, ...)` no fim do
+`artemis-compile`. Mas `sol` é declarado **dentro** do bloco do espelho —
+no fim da função já saiu de escopo. O cartório guarda agora numa variável do
+escopo externo (`cartorioDoAto`).
+
+**Vírgula dupla no import do `artemis-compile`.** `type Msg,, gravarUso` —
+erro de sintaxe, publicado. Ver a seção de método abaixo.
+
+**Sete avisos de tipo antigos, zerados** (`e.message` em `catch` sem tipo,
+`Uint8Array` como `BlobPart`, `CamposTela` sem index signature, `key` em
+`LinhaFila`) e novo `src/vite-env.d.ts` declarando `ImportMetaEnv`, para que a
+verificação de tipos funcione mesmo sem `node_modules` instalado.
+
+### Adicionado
+
+**`verificar.sh` — rode antes de publicar.**
+
+```
+bash verificar.sh
+```
+
+Checa Edge Functions e front. A regra que ele impõe está escrita no cabeçalho
+do arquivo: **não filtrar a saída do compilador por código de erro.** Filtrar
+apenas o ruído estrutural conhecido (módulo ausente, global do Deno) e ler todo
+o resto.
+
+O script diz explicitamente o que NÃO cobre: contagem de parênteses em SQL foi
+deliberadamente removida por gerar falso positivo em todos os arquivos (strings,
+comentários, `$$...$$`), e falso alarme ensina a ignorar a ferramenta.
+
+### Sobre o método — por que isto escapou
+
+A vírgula dupla passou porque eu vinha rodando o compilador **filtrando a saída
+por uma lista estreita de códigos** (`TS2448|TS2304|TS1005|TS2454`). O erro real
+era `TS1003`, que não estava na lista. O filtro que existia para esconder ruído
+escondeu um erro de sintaxe.
+
+Erro de plpgsql — variável ambígua, sobrecarga de função — continua fora do
+alcance de qualquer verificação estática. Só um `CREATE FUNCTION` num Postgres
+real pega. A recomendação do Supabase de teste segue de pé.
+
+### Republicar
+
+`artemis-compile` (crítico), `admin-plataforma`, `cliente-portal`, `voz-stream`,
+`_shared` afeta todas — na prática, publique as 15.
+
+---
+
 ## 2026-08-25 (b) — Correção: sobrecarga de registrar_custodia quebrava a abertura de solicitação
 
 ### Corrigido

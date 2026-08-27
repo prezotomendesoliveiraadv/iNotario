@@ -20,9 +20,24 @@ const admin = createClient(
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
 );
 
+/** UUID v4 canônico — qualquer outra coisa é engano de configuração. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Resolve o cartório do atendimento público.
+ *
+ * O valor do secret é VALIDADO antes de chegar ao banco. Sem isso, colar o
+ * marcador do DEPLOY.md (`<uuid-do-cartorio>`) fazia o Postgres recusar com
+ * "invalid input syntax for type uuid" — um erro de banco, cru, na tela de
+ * quem está tentando abrir uma escritura. Um secret mal preenchido tem que
+ * cair no fallback, não derrubar o atendimento.
+ */
 async function resolveCartorio(): Promise<string | null> {
-  const envId = Deno.env.get("INTAKE_CARTORIO_ID");
-  if (envId) return envId;
+  const envId = (Deno.env.get("INTAKE_CARTORIO_ID") ?? "").trim().replace(/^[<"']|[>"']$/g, "");
+  if (envId && UUID.test(envId)) return envId;
+  if (envId) {
+    console.error(`[iNotario] INTAKE_CARTORIO_ID não é um UUID válido: "${envId}". Usando o primeiro cartório da base.`);
+  }
   const { data } = await admin.from("cartorios").select("id").limit(1).maybeSingle();
   return (data as any)?.id ?? null;
 }
@@ -39,7 +54,8 @@ function parseJson(txt: string): any {
   return JSON.parse(t);
 }
 
-const CARTORIO = Deno.env.get("INTAKE_CARTORIO_ID") ?? "";
+const CARTORIO_ENV = (Deno.env.get("INTAKE_CARTORIO_ID") ?? "").trim().replace(/^[<"']|[>"']$/g, "");
+const CARTORIO = UUID.test(CARTORIO_ENV) ? CARTORIO_ENV : "";
 
 /** Catálogo de empreendimentos do cartório (nome + construtora). */
 async function catalogo(admin: any): Promise<{ id: string; nome: string; construtora: string }[]> {
@@ -81,7 +97,7 @@ Deno.serve(async (req) => {
     // ---- cria a demanda externa ----
     if (action === "iniciar") {
       const cartorioId = await resolveCartorio();
-      if (!cartorioId) return json({ error: "Cartório não configurado (INTAKE_CARTORIO_ID)." }, 500);
+      if (!cartorioId) return json({ error: "Cartório não configurado. Defina INTAKE_CARTORIO_ID com o UUID do cartório (sem < >) ou cadastre um cartório na base." }, 500);
       let { data: tipo } = await admin.from("tipos_ato").select("id, nome").eq("slug", body.tipoAtoSlug).maybeSingle();
       if (!tipo) { const r = await admin.from("tipos_ato").select("id, nome").limit(1).maybeSingle(); tipo = r.data as any; }
       if (!tipo) return json({ error: "Nenhum tipo de ato cadastrado." }, 500);

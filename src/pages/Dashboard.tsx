@@ -64,7 +64,7 @@ function FaixaCompetencia({ c }: { c: Cockpit }) {
   )
 }
 
-function LinhaFila({ s, papel }: { s: ItemFila; papel: string }) {
+function LinhaFila({ s, papel }: { s: ItemFila; papel: string; key?: string }) {
   const idade = faixaIdade(s.diasParado)
   const podeAgir = souCompetente(papel, s.etapa, s.complexidade)
   return (

@@ -86,6 +86,6 @@ Deno.serve(async (req) => {
 
     return json({ error: "ação desconhecida" }, 400);
   } catch (e) {
-    return json({ error: String(e?.message ?? e) }, 500);
+    return json({ error: String((e as any)?.message ?? e) }, 500);
   }
 });

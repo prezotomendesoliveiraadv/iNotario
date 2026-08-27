@@ -396,7 +396,7 @@ async function transcreverOpenAI(audioB64: string, mime: string): Promise<string
   const limpo = limparMime(mime);
   const ext = limpo.includes("mp3") || limpo.includes("mpeg") ? "mp3" : limpo.includes("wav") ? "wav" : limpo.includes("ogg") ? "ogg" : "webm";
   const fd = new FormData();
-  fd.append("file", new Blob([b64ToBytes(audioB64)], { type: limpo }), `audio.${ext}`);
+  fd.append("file", new Blob([b64ToBytes(audioB64) as unknown as BlobPart], { type: limpo }), `audio.${ext}`);
   fd.append("model", STT_MODEL);
   fd.append("language", "pt");
   const r = await fetchResiliente("https://api.openai.com/v1/audio/transcriptions", {

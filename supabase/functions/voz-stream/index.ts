@@ -54,7 +54,7 @@ Deno.serve(async (req) => {
           transcricao = r.transcricao;
           const exv = extrairCampos(r.resposta);
           resposta = exv.texto;
-          camposExtraidos = exv.campos;
+          camposExtraidos = exv.campos as unknown as Record<string, string>;
           if (!transcricao) {
             resposta = "Desculpa, não consegui ouvir direito. Pode repetir, por favor?";
             enviar("meta", { transcricao: "", resposta, inaudivel: true });

@@ -183,7 +183,9 @@ Fluxo público onde o cliente inicia a solicitação sozinho, conversando com a 
 
 **Cartório de destino:** defina qual serventia recebe as demandas externas:
 ```bash
-npx supabase@latest secrets set INTAKE_CARTORIO_ID=<uuid-do-cartorio>
+# Pegue o UUID com:  select id, nome from public.cartorios;
+# Cole o valor SEM as chaves angulares — elas são só marcação deste exemplo.
+npx supabase@latest secrets set INTAKE_CARTORIO_ID=00000000-0000-0000-0000-000000000000
 ```
 (sem isso, usa o primeiro cartório cadastrado.)
 

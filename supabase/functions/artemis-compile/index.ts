@@ -81,6 +81,9 @@ Deno.serve(async (req) => {
     let modeloTexto = "";
     let modeloTitulo = "";
     let clausulasEsp: { nome: string; texto: string }[] = [];
+    // Guardado fora do bloco do espelho: a medição de tokens acontece no fim da
+    // função, onde `sol` já saiu de escopo.
+    let cartorioDoAto: string | null = null;
     if (body.solicitacaoId) {
       const admin2 = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
@@ -198,6 +201,7 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
         .sort((a, b) => (a.status === "validado" ? -1 : 1))[0]?.extraido ?? null;
 
       const sol = solEsp as any;
+      cartorioDoAto = sol?.cartorio_id ?? null;
       // O painel da tela e a minuta leem a MESMA consolidação: sem isto, o
       // escrevente confere um valor na tela e a escritura sai com outro.
       const { data: cons } = await supabase.rpc("consolidar_ato", { p_solicitacao: solicitacaoId });
@@ -286,7 +290,7 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
         provedores: [PROVEDOR_ATIVO],
       }, p_ator: uid ?? null,
     });
-    await gravarUso(supabase, "artemis-compile", (sol as any)?.cartorio_id ?? null, solicitacaoId);
+    await gravarUso(supabase, "artemis-compile", cartorioDoAto, solicitacaoId);
 
     return json({
       mode, minuta, qualificacao,
