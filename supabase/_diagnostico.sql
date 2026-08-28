@@ -34,6 +34,16 @@ union all
 select 'm19 · fn consolidar_ato',
        exists (select 1 from pg_proc where proname='consolidar_ato')
 union all
+select 'm20 · fn aplicar_consolidado',
+       exists (select 1 from pg_proc where proname='aplicar_consolidado')
+union all
+select 'm20 · solicitacoes.onus',
+       exists (select 1 from information_schema.columns
+               where table_name='solicitacoes' and column_name='onus')
+union all
+select 'm21 · fn aplicar_clausulas_contrato',
+       exists (select 1 from pg_proc where proname='aplicar_clausulas_contrato')
+union all
 -- Duas registrar_custodia = sobrecarga não removida: o PostgREST recusa a
 -- chamada com "is not unique" e a abertura de solicitação quebra.
 select 'sanidade · registrar_custodia única',

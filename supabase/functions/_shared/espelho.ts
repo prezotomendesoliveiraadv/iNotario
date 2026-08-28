@@ -84,6 +84,11 @@ const SINONIMOS: Record<string, string[]> = {
   data_contrato: ["data do contrato", "data do compromisso", "data"],
   prazo_entrega: ["prazo de entrega", "habite-se", "prazo"],
 
+  onus: ["onus", "onus e gravames", "gravames", "onus reais", "restricoes da matricula"],
+  cnd_trabalhista: ["cndt", "certidao trabalhista", "cnd trabalhista", "certidao negativa de debitos trabalhistas"],
+  cnd_federal: ["cnd federal", "certidao federal", "certidao negativa de debitos federais", "cnd receita federal", "receita federal"],
+  cnd_imobiliaria: ["cnd tributos imobiliarios", "certidao de tributos imobiliarios", "iptu", "certidao municipal", "tributos municipais"],
+  outras_informacoes: ["outras informacoes", "informacoes adicionais", "observacoes"],
   cartorio_nome: ["cartorio", "tabeliao", "serventia", "nome do cartorio"],
   cidade: ["cidade", "municipio", "comarca"],
   data_ato: ["data do ato", "data da escritura", "data de hoje"],
@@ -272,11 +277,35 @@ export interface ResultadoClausulas {
 
 export function inserirClausulas(
   texto: string,
-  clausulas: { nome: string; texto: string }[],
+  clausulas: { nome: string; texto: string; inserir_apos?: number | null }[],
   numeroInicial = 0,
 ): ResultadoClausulas {
   const uteis = (clausulas ?? []).filter((c) => String(c?.texto ?? "").trim());
   if (!uteis.length) return { texto, posicao: "final", inseridas: 0 };
+
+  // Com posição indicada, cada cláusula entra logo depois da cláusula do
+  // modelo que o escrevente escolheu — e o documento é renumerado ao final.
+  const posicionadas = uteis.filter((c) => Number.isFinite(Number(c.inserir_apos)));
+  if (posicionadas.length) {
+    let t = texto;
+    // De trás para frente: inserir na cláusula 8 não desloca o índice da 3.
+    const ordenadas = [...posicionadas].sort((a, b) => Number(b.inserir_apos) - Number(a.inserir_apos));
+    for (const c of ordenadas) {
+      // O número aqui é provisório: renumerar() reescreve tudo em sequência no
+      // fim. O que importa é o cabeçalho existir, senão a cláusula inserida não
+      // entra na contagem e o documento fica com numeração repetida.
+      t = inserirApos(
+        t, Number(c.inserir_apos),
+        `CLÁUSULA 0ª — ${String(c.nome ?? "").toUpperCase()}\n${String(c.texto).trim()}`,
+      );
+    }
+    const soltas = uteis.filter((c) => !Number.isFinite(Number(c.inserir_apos)));
+    if (soltas.length) {
+      const r = inserirClausulas(t, soltas.map((c) => ({ nome: c.nome, texto: c.texto })), numeroInicial);
+      t = r.texto;
+    }
+    return { texto: renumerar(t), posicao: "marcador", inseridas: uteis.length };
+  }
 
   const bloco = uteis
     .map((c, i) => {
@@ -289,7 +318,6 @@ export function inserirClausulas(
     return { texto: texto.replace(MARCA_CLAUSULAS, bloco), posicao: "marcador", inseridas: uteis.length };
   }
 
-  // Procura o fecho linha a linha para inserir antes dele.
   const linhas = texto.split("\n");
   const idx = linhas.findIndex((l) => INICIO_FECHO.test(l));
   if (idx > 0) {
@@ -298,4 +326,123 @@ export function inserirClausulas(
   }
 
   return { texto: `${texto.trimEnd()}\n\n${bloco}\n`, posicao: "final", inseridas: uteis.length };
+}
+
+/** Cabeçalho de cláusula: "CLÁUSULA 3ª", "Cláusula Terceira", "3." no início da linha. */
+const CABECALHO = /^\s*(?:cl[áa]usula\s+)?(\d{1,2})\s*[ªº.\-–—:)]/i;
+
+/** Todas as cláusulas do texto, com o índice da linha em que começam. */
+export function numerarClausulas(texto: string): { numero: number; linha: number }[] {
+  const out: { numero: number; linha: number }[] = [];
+  texto.split("\n").forEach((l, i) => {
+    const m = CABECALHO.exec(l);
+    if (m) out.push({ numero: Number(m[1]), linha: i });
+  });
+  return out;
+}
+
+/** Insere um bloco imediatamente após o fim da cláusula de número informado. */
+function inserirApos(texto: string, numero: number, bloco: string): string {
+  const linhas = texto.split("\n");
+  const marcos = numerarClausulas(texto);
+  const alvo = marcos.find((m) => m.numero === numero);
+  if (!alvo) return `${texto.trimEnd()}\n\n${bloco}\n`;
+
+  const seguinte = marcos.find((m) => m.linha > alvo.linha);
+  const onde = seguinte ? seguinte.linha : linhas.length;
+  linhas.splice(onde, 0, "", bloco, "");
+  return linhas.join("\n");
+}
+
+/**
+ * Renumera as cláusulas em sequência, preservando a redação de cada cabeçalho.
+ *
+ * Sem isto, inserir uma cláusula no meio produz "CLÁUSULA 3ª" seguida de outra
+ * "CLÁUSULA 3ª" — e uma escritura com numeração repetida é devolvida pelo
+ * Registro de Imóveis.
+ */
+export function renumerar(texto: string): string {
+  let n = 0;
+  return texto
+    .split("\n")
+    .map((l) => {
+      const m = CABECALHO.exec(l);
+      if (!m) return l;
+      n++;
+      // Troca apenas o número, mantendo "CLÁUSULA", o ordinal e a pontuação.
+      return l.replace(/(\d{1,2})(\s*[ªº.\-–—:)])/, `${n}$2`);
+    })
+    .join("\n");
+}
+
+
+// ============================================================================
+// Transcrição de ônus e certidões para o texto da minuta
+//
+// O modelo da construtora traz campos como [ÔNUS E GRAVAMES] e
+// [CND TRABALHISTA]. Estes formatadores transformam o dado estruturado do
+// painel definitivo na redação que entra no lugar do colchete.
+// ============================================================================
+
+export function textoOnus(onus: any[]): string {
+  const uteis = (onus ?? []).filter((o) => o?.tipo || o?.detalhe);
+  if (!uteis.length) return "nenhum ônus ou gravame consta da matrícula";
+  return uteis
+    .map((o) => {
+      const partes = [o.tipo, o.detalhe, o.credor && `credor: ${o.credor}`, o.valor && `valor: ${o.valor}`];
+      return partes.filter(Boolean).join(" — ");
+    })
+    .join("; ");
+}
+
+/** "negativa nº 123, expedida em 01/08/2026, válida até 30/10/2026" */
+export function textoCertidao(c: any): string {
+  if (!c) return "";
+  const dt = (d?: string) => {
+    if (!d) return "";
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d));
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : String(d);
+  };
+  const teor = String(c.teor ?? "").trim();
+  const partes = [
+    teor && teor !== "indefinido" ? teor : null,
+    c.numero ? `nº ${c.numero}` : null,
+    c.emitida_em ? `expedida em ${dt(c.emitida_em)}` : null,
+    c.validade ? `válida até ${dt(c.validade)}` : null,
+  ].filter(Boolean);
+  return partes.join(", ");
+}
+
+const TIPO_CND: Record<string, RegExp> = {
+  cnd_trabalhista: /trabalhist|cndt|tst/i,
+  cnd_federal: /federal|receita|pgfn|uni[aã]o/i,
+  cnd_imobiliaria: /imobili|iptu|municip|predial/i,
+};
+
+/**
+ * Acrescenta ao dicionário os campos que só existem no painel definitivo:
+ * ônus, cada tipo de certidão e o texto livre do escrevente.
+ */
+export function enriquecerComPainel(
+  dic: Record<string, string>,
+  painel: any,
+): Record<string, string> {
+  const out = { ...dic };
+  const onus = painel?.onus ?? [];
+  out.onus = textoOnus(onus);
+
+  const certs: any[] = painel?.certidoes ?? [];
+  for (const [chave, re] of Object.entries(TIPO_CND)) {
+    const c = certs.find((x) => re.test(String(x?.tipo ?? "")));
+    if (c) out[chave] = textoCertidao(c);
+  }
+  // Lista completa, para modelos que trazem um campo único de certidões.
+  if (certs.length) {
+    out.certidoes = certs.map((c) => `${c.tipo}: ${textoCertidao(c)}`).join("; ");
+  }
+
+  const extra = String(painel?.outras_informacoes ?? "").trim();
+  if (extra) out.outras_informacoes = extra;
+
+  return out;
 }

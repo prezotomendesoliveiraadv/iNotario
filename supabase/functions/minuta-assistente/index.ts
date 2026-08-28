@@ -13,7 +13,7 @@ import { corsHeaders, json } from "../_shared/cors.ts";
 import { respostaErro } from "../_shared/erros.ts";
 import { callModel, callModelJson, sha256, PROVEDOR_ATIVO, MODELO_ATIVO, gravarUso } from "../_shared/artemis.ts";
 
-import { espelharModelo, dicionarioDoAto, inserirClausulas } from "../_shared/espelho.ts";
+import { espelharModelo, dicionarioDoAto, inserirClausulas, enriquecerComPainel } from "../_shared/espelho.ts";
 
 async function contexto(admin: any, solicitacaoId: string) {
   const { data: sol } = await admin.from("solicitacoes")
@@ -26,8 +26,9 @@ async function contexto(admin: any, solicitacaoId: string) {
   const { data: docs } = await admin.from("documentos")
     .select("tipo, extraido, validade").eq("solicitacao_id", solicitacaoId);
   const { data: cls } = await admin.from("solicitacao_clausulas")
-    .select("nome, texto, ordem").eq("solicitacao_id", solicitacaoId).order("ordem");
+    .select("nome, texto, ordem, inserir_apos").eq("solicitacao_id", solicitacaoId).order("ordem");
   const { data: mod } = await admin.rpc("modelo_para_solicitacao", { p_solicitacao: solicitacaoId });
+  const { data: painelDef } = await admin.rpc("painel_definitivo", { p_solicitacao: solicitacaoId });
   const { data: minuta } = await admin.from("minutas")
     .select("id, versao, conteudo").eq("solicitacao_id", solicitacaoId)
     .order("versao", { ascending: false }).limit(1).maybeSingle();
@@ -48,7 +49,16 @@ DADOS DO ATO:
 ${JSON.stringify(s.dados ?? {}, null, 1).slice(0, 2000)}
 
 MATRÍCULA (lida por IA):
-${mat ? JSON.stringify(mat).slice(0, 1500) : "(não lida)"}`;
+${mat ? JSON.stringify(mat).slice(0, 1500) : "(não lida)"}
+
+PAINEL DEFINITIVO DO ATO — esta é a base conferida pelo cartório. Em
+"clausulas_contrato" estão os temas que o escrevente marcou como pertinentes
+(alienação fiduciária, rescisão, arrependimento e afins): trate-os como
+característicos DESTE negócio, mas NÃO redija a cláusula por conta própria — a
+redação vem do acervo do cartório. Quando ela
+divergir de qualquer outra fonte acima, PREVALECE. Não invente dado que não
+esteja aqui; se faltar, diga que falta.
+${JSON.stringify(painelDef ?? {}, null, 1).slice(0, 3000)}`;
 
   const m = ((mod as any[]) ?? [])[0];
   const blocoModelo = m?.texto
@@ -62,7 +72,7 @@ ${mat ? JSON.stringify(mat).slice(0, 1500) : "(não lida)"}`;
   return {
     sol: s, bloco, blocoModelo, blocoClausulas, minuta,
     modeloFonte: m?.fonte ?? null,
-    clausulas: ((cls as any[]) ?? []).map((c: any) => ({ nome: c.nome, texto: c.texto })),
+    clausulas: ((cls as any[]) ?? []).map((c: any) => ({ nome: c.nome, texto: c.texto, inserir_apos: c.inserir_apos })),
     modeloTexto: String(m?.texto ?? ""),
     partes: (partes as any[]) ?? [],
     docs: (docs as any[]) ?? [],
@@ -129,14 +139,15 @@ Responda APENAS com JSON:
 
       if (ctx.modeloTexto.trim()) {
         const pega = (t: string) => ctx.docs.filter((d: any) => d.tipo === t && d.extraido)[0]?.extraido ?? null;
-        const { data: cons } = await admin.rpc("consolidar_ato", { p_solicitacao: solicitacaoId });
+        const { data: cons } = await admin.rpc("painel_definitivo", { p_solicitacao: solicitacaoId });
         const doPainel: Record<string, string> = {};
-        for (const [k, v] of Object.entries(((cons as any)?.campos ?? {}) as Record<string, any>)) {
-          if (v?.valor) doPainel[k] = String(v.valor);
+        // O painel DEFINITIVO é a base: é o que o escrevente aplicou e conferiu.
+        for (const [k, v] of Object.entries(((cons as any)?.dados ?? {}) as Record<string, any>)) {
+          if (v !== null && v !== undefined && String(v).trim()) doPainel[k] = String(v);
         }
         // O painel da tela e a minuta leem a MESMA consolidação: sem isto, o
         // escrevente confere um valor na tela e a escritura sai com outro.
-        const esp = espelharModelo(ctx.modeloTexto, {
+        const esp = espelharModelo(ctx.modeloTexto, enriquecerComPainel({
           ...dicionarioDoAto({
             solicitacao: ctx.sol, partes: ctx.partes,
             imovel: pega("matricula") ?? ctx.sol?.dados,
@@ -144,14 +155,14 @@ Responda APENAS com JSON:
             empreendimento: ctx.sol?.empreendimentos, cartorio: ctx.sol?.cartorios,
           }),
           ...doPainel,
-        });
+        }, cons));
         texto = esp.texto;
         origemTexto = "espelho_modelo";
         pendencias = esp.pendentes;
 
         // Mesma correção do artemis-compile: com espelho, a instrução de
         // cláusulas no prompt não produz efeito no documento final.
-        const clsEsp = (ctx.clausulas ?? []).map((c: any) => ({ nome: c.nome, texto: c.texto }));
+        const clsEsp = (ctx.clausulas ?? []).map((c: any) => ({ nome: c.nome, texto: c.texto, inserir_apos: c.inserir_apos }));
         if (clsEsp.length) {
           const ins = inserirClausulas(texto, clsEsp);
           texto = ins.texto;
@@ -198,6 +209,80 @@ Responda APENAS com JSON:
     // =====================================================================
     // ANALISAR RESSALVAS — sugere o texto ajustado (não aplica)
     // =====================================================================
+    // ---- check-up de poderes: contrato social + procurações (item 9) ----
+    if (action === "checkup_poderes") {
+      const ctxP = await contexto(admin, solicitacaoId);
+      if (!ctxP) return json({ error: "Solicitação não encontrada." }, 404);
+      const minutaTxt = String((ctxP.minuta as any)?.conteudo ?? "");
+      if (!minutaTxt.trim()) return json({ error: "Gere a minuta antes de verificar os poderes." }, 400);
+
+      const { data: emp } = await admin.from("solicitacoes")
+        .select("empreendimento_id, empreendimentos(construtora_id)").eq("id", solicitacaoId).maybeSingle();
+      const construtoraId = (emp as any)?.empreendimentos?.construtora_id ?? null;
+      if (!construtoraId) {
+        return json({ error: "Este ato não está vinculado a uma construtora — não há poderes a verificar." }, 400);
+      }
+
+      const [{ data: emp2 }, { data: reps }] = await Promise.all([
+        admin.from("construtoras").select("razao_social, cnpj, contrato_social_lido").eq("id", construtoraId).maybeSingle(),
+        admin.from("construtora_representantes")
+          .select("nome, cargo, poderes_forma, procuracao_lida, procuracao_validade, procuracao_poderes, origem")
+          .eq("construtora_id", construtoraId),
+      ]);
+
+      const c = emp2 as any;
+      const lista = ((reps as any[]) ?? []);
+      if (!c?.contrato_social_lido && !lista.some((r) => r.procuracao_lida)) {
+        return json({ error: "Nenhum contrato social ou procuração foi lido pela IA no cadastro desta construtora. Faça a leitura antes." }, 400);
+      }
+
+      const system = `Você é a Artemis, assistente notarial. Verifique se QUEM ASSINA pela vendedora na minuta tem poderes para o ato, confrontando o texto com o contrato social e as procurações do cadastro.
+
+Responda SOMENTE com:
+{ "assinantes":[ {"nome":"", "encontrado_em":"contrato_social|procuracao|nenhum",
+                  "poderes_suficientes": true, "forma":"isolada|conjunta|conjunta_com_outro|indefinida",
+                  "restricoes":[""], "observacao":""} ],
+  "restricoes_aplicaveis":[""], "veredito":"apto|atencao|impeditivo", "resumo":"" }
+
+Critérios:
+- Alguém que assina pela vendedora e NÃO aparece nem no contrato social nem em procuração é "impeditivo".
+- Forma conjunta com apenas um assinante na minuta é "impeditivo".
+- Procuração vencida na data de hoje (${new Date().toISOString().slice(0, 10)}) é "impeditivo".
+- Falta de poder específico para ALIENAR IMÓVEL, quando o ato é venda, é "impeditivo".
+- Limite de valor abaixo do valor do ato, vedação de garantia, exigência de anuência: "atencao".
+- Na dúvida sobre a extensão de um poder, prefira "atencao" a "apto" — mas não invente restrição que o documento não traz.`;
+
+      const entrada = `MINUTA:
+"""
+${minutaTxt.slice(0, 12000)}
+"""
+
+VENDEDORA: ${c?.razao_social ?? "—"} (CNPJ ${c?.cnpj ?? "—"})
+
+CONTRATO SOCIAL (leitura por IA):
+${c?.contrato_social_lido ? JSON.stringify(c.contrato_social_lido).slice(0, 4000) : "(não lido)"}
+
+REPRESENTANTES E PROCURAÇÕES:
+${lista.length
+  ? lista.map((r) => `- ${r.nome}${r.cargo ? ` (${r.cargo})` : ""} · forma: ${r.poderes_forma ?? "—"} · origem: ${r.origem ?? "—"}`
+      + `${r.procuracao_validade ? ` · procuração válida até ${r.procuracao_validade}` : ""}`
+      + `${r.procuracao_lida ? `\n  procuração: ${JSON.stringify(r.procuracao_lida).slice(0, 1200)}` : ""}`).join("\n")
+  : "(nenhum cadastrado)"}
+
+VALOR DO ATO: ${(ctxP.sol as any)?.dados?.valor ?? "—"}`;
+
+      const r = await callModelJson(system, [{ role: "user", content: entrada }], 2000);
+
+      await admin.rpc("registrar_custodia", {
+        p_solicitacao: solicitacaoId, p_minuta: (ctxP.minuta as any)?.id ?? null,
+        p_acao: "ressalvas_analisadas",
+        p_detalhe: { tipo: "checkup_poderes", veredito: r?.veredito, modelo: MODELO_ATIVO },
+        p_ator: uid ?? null,
+      });
+      await gravarUso(admin, "minuta-assistente", (ctxP.sol as any)?.cartorio_id ?? null, solicitacaoId);
+      return json({ ok: true, checkup: r });
+    }
+
     if (action === "analisar_ressalvas") {
       const { data: rodadas } = await admin.from("validacoes_construtora")
         .select("rodada, acao, observacoes, autor_nome, created_at")

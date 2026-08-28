@@ -20,7 +20,7 @@ import {
   type Modo, type Contexto, type Msg, gravarUso } from "../_shared/artemis.ts";
 import { criarCofre, type Entidade } from "../_shared/tokenizer.ts";
 import { clausulasMatricula, analisarMatricula } from "../_shared/matricula.ts";
-import { espelharModelo, dicionarioDoAto, inserirClausulas } from "../_shared/espelho.ts";
+import { espelharModelo, dicionarioDoAto, inserirClausulas, enriquecerComPainel } from "../_shared/espelho.ts";
 
 const ESQUEMA_ELABORACAO = `Responda SOMENTE com um objeto JSON válido (sem texto fora do JSON, sem cercas de código), no formato:
 {
@@ -105,8 +105,8 @@ inaplicável, mantenha a numeração coerente e registre a supressão em "alerta
       }
 
       const { data: cls } = await admin2.from("solicitacao_clausulas")
-        .select("nome, texto, ordem").eq("solicitacao_id", body.solicitacaoId).order("ordem");
-      clausulasEsp = ((cls as any[]) ?? []).map((c) => ({ nome: c.nome, texto: c.texto }));
+        .select("nome, texto, ordem, inserir_apos").eq("solicitacao_id", body.solicitacaoId).order("ordem");
+      clausulasEsp = ((cls as any[]) ?? []).map((c) => ({ nome: c.nome, texto: c.texto, inserir_apos: c.inserir_apos }));
       if (((cls as any[]) ?? []).length) {
         blocoClausulas = `
 
@@ -204,10 +204,12 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
       cartorioDoAto = sol?.cartorio_id ?? null;
       // O painel da tela e a minuta leem a MESMA consolidação: sem isto, o
       // escrevente confere um valor na tela e a escritura sai com outro.
-      const { data: cons } = await supabase.rpc("consolidar_ato", { p_solicitacao: solicitacaoId });
+      const { data: cons } = await supabase.rpc("painel_definitivo", { p_solicitacao: solicitacaoId });
       const doPainel: Record<string, string> = {};
-      for (const [k, v] of Object.entries(((cons as any)?.campos ?? {}) as Record<string, any>)) {
-        if (v?.valor) doPainel[k] = String(v.valor);
+      // O painel DEFINITIVO é a base: é o que o escrevente aplicou e conferiu,
+      // não a leitura crua dos documentos.
+      for (const [k, v] of Object.entries(((cons as any)?.dados ?? {}) as Record<string, any>)) {
+        if (v !== null && v !== undefined && String(v).trim()) doPainel[k] = String(v);
       }
 
       const dicBase = dicionarioDoAto({
@@ -218,7 +220,7 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
         empreendimento: sol?.empreendimentos,
         cartorio: sol?.cartorios,
       });
-      const dic = { ...dicBase, ...doPainel };
+      const dic = enriquecerComPainel({ ...dicBase, ...doPainel }, cons);
 
       const esp = espelharModelo(modeloTexto, dic);
       conteudo = esp.texto;

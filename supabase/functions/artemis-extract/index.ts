@@ -97,6 +97,58 @@ Deno.serve(async (req) => {
     const uid = _u?.user?.id ?? null;
     const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
+    // ---- procuração de representante da construtora (item 8) ----
+    if (acao === "procuracao_representante") {
+      const repId = String(body.representanteId ?? "");
+      if (!repId) return json({ error: "representanteId é obrigatório." }, 400);
+
+      const { data: rep, error: eR } = await userClient
+        .from("construtora_representantes").select("*").eq("id", repId).maybeSingle();
+      if (eR || !rep) return json({ error: "Representante não encontrado ou sem acesso." }, 404);
+      const r = rep as any;
+      if (!r.procuracao_path) return json({ error: "Anexe a procuração antes de mandar ler." }, 400);
+
+      const { data: blobP, error: eB } = await admin.storage.from("construtoras").download(r.procuracao_path);
+      if (eB || !blobP) return json({ error: "Falha ao ler a procuração no storage." }, 500);
+      const bytesP = new Uint8Array(await blobP.arrayBuffer());
+
+      const raw = await callModelVision(SYSTEM, `Procuração pública ou particular. Extraia APENAS o que o documento disser.
+
+Responda SOMENTE com:
+{ "outorgante":"", "outorgado":"", "qualificacao_outorgado":"",
+  "poderes":[""], "restricoes":[""],
+  "pode_alienar_imoveis": true, "pode_dar_garantia": true, "pode_substabelecer": true,
+  "limite_valor":"", "prazo":"", "lavrada_em":"AAAA-MM-DD", "validade":"AAAA-MM-DD",
+  "livro":"", "folha":"", "tabelionato":"", "confianca":"alta|media|baixa" }
+
+Regras:
+- "poderes": um item por poder relevante ao ato notarial, com as palavras do documento.
+- "restricoes": limites reais — teto de valor, vedação de garantia, necessidade de anuência,
+  poderes que NÃO foram outorgados mas seriam esperados (ex.: alienar imóveis).
+- Os três campos booleanos respondem à pergunta direta: o documento outorga esse poder?
+  Em caso de dúvida ou silêncio, use false — a ausência de poder é mais segura que a
+  presunção dele.
+- "validade" só quando o documento fixar prazo. Sem prazo expresso, deixe vazio.
+- Nunca invente. Campo sem informação vai vazio.`,
+        [{ mime: blobP.type || "application/pdf", data: bytesToBase64(bytesP) }], 1600);
+
+      let lido: any;
+      try { lido = parseJson(raw); } catch { return json({ error: "Não foi possível interpretar a procuração." }, 502); }
+
+      const dt = (v: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v ?? "")) ? String(v) : null);
+      await admin.from("construtora_representantes").update({
+        procuracao_lida: lido,
+        procuracao_lida_em: new Date().toISOString(),
+        // Só preenche o que estava em branco: dado conferido por pessoa manda.
+        procuracao_lavrada_em: r.procuracao_lavrada_em || dt(lido.lavrada_em),
+        procuracao_validade: r.procuracao_validade || dt(lido.validade),
+        procuracao_poderes: r.procuracao_poderes || (Array.isArray(lido.poderes) ? lido.poderes.join("; ") : null),
+      }).eq("id", repId);
+
+      await gravarUso(admin, "artemis-extract", null, null);
+      return json({ ok: true, leitura: lido });
+    }
+
     if (acao === "certidao_construtora") {
       // Certidão do cadastro do empreendimento/construtora. Fica no bucket
       // `construtoras`, não em `documentos` — é do cadastro, não do protocolo.
