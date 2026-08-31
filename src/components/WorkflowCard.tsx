@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import Modal from './Modal'
+import { checkupPoderes } from '../lib/workflow'
 import { dataCurta, dataHora } from '../lib/tempo'
 import type { Solicitacao } from '../lib/types'
 import {
@@ -30,6 +31,7 @@ export default function WorkflowCard({ solic, onChange }: { solic: Solicitacao; 
   const [imp, setImp] = useState<string>(solic.impostos != null ? String(solic.impostos) : '')
   const [minutaId, setMinutaId] = useState<string | null>(null)
   const [avisoVersao, setAvisoVersao] = useState<number | null>(null)
+  const [poderes, setPoderes] = useState<any | null>(null)
   const [conteudo, setConteudo] = useState('')
   const [saidas, setSaidas] = useState<Saida[]>([])
   const [log, setLog] = useState<WorkflowLog[]>([])
@@ -141,6 +143,10 @@ export default function WorkflowCard({ solic, onChange }: { solic: Solicitacao; 
         <div className="label">3 · Documento (editável antes do PDF final)</div>
         <textarea className="input" style={{ minHeight: 120, fontFamily: 'Georgia, serif' }} value={conteudo} onChange={e => setConteudo(e.target.value)} placeholder="A minuta aparece aqui após a compilação pela Artemis. Edite antes de gerar o PDF." />
         <div className="flex flex-wrap gap-2 mt-2">
+          <button className="btn-ghost" disabled={busy === 'pod'}
+            onClick={() => run('pod', async () => { setPoderes(await checkupPoderes(solic.id)) })}>
+            {busy === 'pod' ? 'Verificando…' : 'Verificar poderes'}
+          </button>
           <button className="btn-ghost" disabled={!conteudo.trim() || busy === 'sav'}
             onClick={() => run('sav', async () => {
               const { versao } = await salvarMinuta(solic.id, conteudo)
@@ -233,6 +239,53 @@ export default function WorkflowCard({ solic, onChange }: { solic: Solicitacao; 
           A versão anterior continua disponível no histórico e na cadeia de custódia —
           nada foi sobrescrito.
         </p>
+      </Modal>
+
+      <Modal
+        aberto={poderes !== null}
+        apenasAviso
+        titulo="Verificação de poderes"
+        onFechar={() => setPoderes(null)}
+      >
+        {poderes && (
+          <div>
+            <div className={`rounded-lg border px-3 py-2 mb-2 text-xs font-semibold ${
+              poderes.veredito === 'apto' ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+              : poderes.veredito === 'impeditivo' ? 'bg-red-50 text-red-700 border-red-200'
+              : 'bg-amber-50 text-amber-800 border-amber-200'}`}>
+              {poderes.veredito === 'apto' ? 'Poderes conferem'
+               : poderes.veredito === 'impeditivo' ? 'Impeditivo' : 'Atenção — verificar'}
+            </div>
+            {poderes.resumo && <p className="text-xs mb-2">{poderes.resumo}</p>}
+
+            {(poderes.assinantes ?? []).map((a: any, i: number) => (
+              <div key={i} className="text-xs border-l-2 border-black/10 pl-2 mb-2">
+                <b>{a.nome}</b>
+                <span className="text-ink/50"> · {a.encontrado_em === 'nenhum' ? 'NÃO ENCONTRADO no cadastro' : a.encontrado_em}</span>
+                <span className="text-ink/50"> · forma {a.forma}</span>
+                {!a.poderes_suficientes && <div className="text-red-700">Poderes insuficientes para este ato.</div>}
+                {(a.restricoes ?? []).map((r: string, j: number) => (
+                  <div key={j} className="text-amber-800">— {r}</div>
+                ))}
+                {a.observacao && <div className="text-ink/60">{a.observacao}</div>}
+              </div>
+            ))}
+
+            {(poderes.restricoes_aplicaveis ?? []).length > 0 && (
+              <div className="mt-2">
+                <div className="text-[11px] uppercase tracking-wider text-brass mb-1">Restrições aplicáveis</div>
+                <ul className="text-xs list-disc ml-4 space-y-0.5">
+                  {poderes.restricoes_aplicaveis.map((r: string, i: number) => <li key={i}>{r}</li>)}
+                </ul>
+              </div>
+            )}
+
+            <div className="text-[11px] text-ink/50 mt-3">
+              Confronto assistido por IA entre a minuta, o contrato social e as procurações do
+              cadastro. Não substitui a conferência do tabelião.
+            </div>
+          </div>
+        )}
       </Modal>
     </>
   )

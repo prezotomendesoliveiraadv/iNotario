@@ -300,11 +300,11 @@ export async function clausulasDoAto(solicitacaoId: string): Promise<ClausulaDoA
 }
 
 export async function inserirClausulaNoAto(
-  solicitacaoId: string, c: { clausula_id?: string; nome: string; texto: string; ordem?: number },
+  solicitacaoId: string, c: { clausula_id?: string; nome: string; texto: string; ordem?: number; inserir_apos?: number | null },
 ): Promise<void> {
   const { error } = await supabase.from('solicitacao_clausulas').insert({
     solicitacao_id: solicitacaoId, clausula_id: c.clausula_id ?? null,
-    nome: c.nome, texto: c.texto, ordem: c.ordem ?? 0,
+    nome: c.nome, texto: c.texto, ordem: c.ordem ?? 0, inserir_apos: c.inserir_apos ?? null,
   })
   if (error) throw new Error(error.message)
 }

@@ -15,7 +15,7 @@ import {
   type LeituraContratoSocial,
 } from '../lib/incorporacao'
 import { mascaraCnpj, erroCnpj } from '../lib/cnpj'
-import { lerCertidaoConstrutora } from '../lib/documentos'
+import { lerCertidaoConstrutora, lerProcuracaoRepresentante } from '../lib/documentos'
 import ContratoSocialCard from '../components/ContratoSocialCard'
 
 const vazioRep = (): Partial<Representante> => ({
@@ -43,6 +43,16 @@ export default function Construtoras() {
   const [novoRep, setNovoRep] = useState<Partial<Representante> | null>(null)
   const [novaCert, setNovaCert] = useState<Partial<Certidao> | null>(null)
   const [lendoCert, setLendoCert] = useState<string | null>(null)
+  const [lendoProc, setLendoProc] = useState<string | null>(null)
+
+  // Mesma lógica da certidão: a IA lê a procuração e preenche só o que estiver
+  // em branco. Poderes e restrições ficam disponíveis para o check-up da minuta.
+  async function lerProcuracao(id: string) {
+    setLendoProc(id); setErro(null)
+    try { await lerProcuracaoRepresentante(id); setReps(await listarRepresentantes(sel!.id)) }
+    catch (e: any) { setErro(e.message ?? 'Falha ao ler a procuração.') }
+    finally { setLendoProc(null) }
+  }
 
   // Lê número, emissão e validade direto do PDF. Só preenche o que estiver em
   // branco: dado já conferido por pessoa não é sobrescrito por leitura da IA.
@@ -232,6 +242,22 @@ export default function Construtoras() {
                         Procuração até {dataCurta(new Date(r.procuracao_validade + 'T12:00:00'))} · {st?.txt}
                       </span>
                     )}
+                    {(r as any).procuracao_lida && (
+                      <span className="block text-[11px] text-ink/55">
+                        {((r as any).procuracao_lida.poderes ?? []).slice(0, 2).join('; ')}
+                        {(((r as any).procuracao_lida.restricoes ?? []).length > 0) && (
+                          <b className="text-amber-800"> · {(r as any).procuracao_lida.restricoes.length} restrição(ões)</b>
+                        )}
+                      </span>
+                    )}
+                  </span>
+                  {(r as any).procuracao_path && (
+                    <button className="btn-ghost shrink-0" style={{ padding: '.15rem .5rem', fontSize: '.7rem' }}
+                      onClick={() => lerProcuracao(r.id!)} disabled={lendoProc === r.id}>
+                      {lendoProc === r.id ? 'lendo…' : (r as any).procuracao_lida ? 'reler (IA)' : 'ler procuração (IA)'}
+                    </button>
+                  )}
+                  <span className="hidden">
                   </span>
                   <button className="text-ink/35 hover:text-red-600 text-lg leading-none px-1"
                     onClick={async () => { await removerRepresentante(r.id!); setReps(await listarRepresentantes(sel.id)) }}>×</button>

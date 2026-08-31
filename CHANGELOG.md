@@ -1,5 +1,131 @@
 # Changelog
 
+## 2026-08-28 (b) — v9.1: cláusulas do contrato chegam ao painel definitivo
+
+### Corrigido / Adicionado
+
+**As cláusulas contratuais paravam no card de resumo.** A leitura do compromisso
+já extraía alienação fiduciária, garantia hipotecária, rescisão, retenção,
+arrependimento e afins em `clausulas_relevantes` — mas isso não chegava ao
+painel definitivo nem à minuta. Os valores (preço, sinal, saldo, forma de
+pagamento, financiamento, datas) já eram transcritos; as cláusulas, não.
+
+Novo bloco **Cláusulas do contrato** no painel definitivo:
+
+- `aplicar_clausulas_contrato` transcreve os temas lidos, com resumo e trecho literal.
+- Cada tema tem **caixa de seleção**: nem tudo que está no compromisso vai para a
+  escritura, e essa é decisão do escrevente.
+- `slug_do_tema` liga o tema ao **acervo de cláusulas do cartório** por slug
+  (`alienacao-fiduciaria`, `rescisao`, `retencao`, `direito-de-arrependimento`…).
+- *Adicionar as marcadas ao ato* insere as cláusulas com a **redação do acervo**,
+  aproveitando o posicionamento e a renumeração da v9.0.
+
+**A IA identifica o tema; o cartório fornece o texto.** Tema sem cláusula
+cadastrada não é adicionado — a tela nomeia o slug que falta. Deixar a IA
+redigir cláusula de alienação fiduciária por conta própria é exatamente o que o
+espelho do modelo existe para impedir.
+
+O prompt do assistente foi ajustado no mesmo sentido: pode tratar os temas como
+característicos do negócio, não pode redigir a cláusula.
+
+**Decisão do escrevente sobrevive à releitura.** Marcar ou desmarcar um tema não
+é revertido quando o contrato é lido de novo.
+
+### Um defeito evitado na escrita
+
+Dentro do laço, `SELECT ... INTO` sem resultado preserva o valor anterior da
+variável. Como há `CONTINUE` no meio, zerar no fim do laço não bastava: uma
+cláusula sem correspondente herdaria o vínculo da anterior e receberia a
+**redação errada**. O reset foi para o início do corpo do laço.
+
+### Migration
+
+`supabase/clausulas_contrato.sql` — **21ª**, depois de `painel_definitivo.sql`.
+Redefine `painel_definitivo` para expor as cláusulas marcadas.
+
+### Republicar
+
+`minuta-assistente`.
+
+### Antes de usar
+
+Cadastre no acervo as cláusulas com os slugs esperados. Sem elas, os temas são
+identificados e exibidos, mas nada é inserido na minuta.
+
+---
+
+## 2026-08-28 — v9.0: painel definitivo, versões da minuta, poderes e cláusulas posicionadas
+
+### Adicionado
+
+**Painel definitivo do ato (itens 1, 2, 3).** O painel da 19ª mostra o que os
+documentos dizem; este mostra o que o cartório **adotou**. Botão *Aplicar dados
+dos documentos* grava no `solicitacoes.dados` e transcreve ônus e certidões
+para campos próprios. Por padrão só preenche o que está vazio — campo corrigido
+à mão não é revertido por releitura; há um *sobrescrever* explícito.
+
+Aplicar é ato do escrevente, registrado na custódia com autor e horário. Um
+pop-up lista campo a campo o que mudou, de onde para onde e a partir de qual
+fonte.
+
+- **Ônus e gravames** transcritos da matrícula, incluindo indisponibilidade.
+- **Certidões** com teor (`negativa` / `positiva` / `positiva com efeitos de
+  negativa`), número, emissão e vigência. A tela avisa quando o teor ficou
+  indefinido — ele entra na minuta.
+- **Outras informações do ato**: texto livre com caixa de seleção que decide se
+  entra na minuta, via campo `[OUTRAS INFORMAÇÕES]` do modelo.
+
+**A Artemis passou a conversar sobre o painel definitivo (item 7).** Nova função
+`painel_definitivo`, usada tanto pelo assistente quanto pelas duas rotas de
+minuta. O prompt diz que ela **prevalece** sobre qualquer outra fonte e que
+dado ausente deve ser declarado ausente, não inventado.
+
+**Ônus e certidões na minuta (item 2).** `enriquecerComPainel` transforma o dado
+estruturado na redação que entra no colchete: `[ÔNUS E GRAVAMES]`,
+`[CND TRABALHISTA]`, `[CND FEDERAL]`, `[CND TRIBUTOS IMOBILIÁRIOS]`,
+`[CERTIDÕES]`, `[OUTRAS INFORMAÇÕES]`. Certidão sai como
+"negativa nº 123, expedida em 01/08/2026, válida até 30/10/2026".
+
+**Aviso de versão em toda geração (item 4).** O pop-up que só existia na edição
+manual passou a valer para geração rápida e para o assistente.
+
+**Baixar em .docx e PDF (item 5).** O .docx é WordprocessingML gerado sem
+biblioteca — cabeçalhos de cláusula em negrito, corpo justificado, A4 com
+margens notariais. O PDF sai pela impressão do navegador, o que preserva
+acentuação sem fonte embarcada.
+
+**Subir versão editada (item 6).** Cria versão nova com campo de descrição
+obrigatório, que aparece no seletor de versões. Aceita texto colado; `.docx` e
+`.pdf` ficam de fora **de propósito** — extrair texto deles no navegador daria
+resultado incerto, e minuta com formatação perdida em silêncio é pior que um
+aviso claro.
+
+**Leitura de procurações por IA (item 8).** Ação `procuracao_representante`,
+com botão em cada representante. Extrai poderes, restrições, limite de valor,
+prazo, e responde em booleano às três perguntas que decidem o ato: pode alienar
+imóveis, pode dar garantia, pode substabelecer. **Silêncio vira `false`** — a
+ausência de poder é mais segura que a presunção dele.
+
+**Verificar poderes (item 9).** Confronta quem assina pela vendedora na minuta
+com o contrato social e as procurações. Assinante fora do cadastro, forma
+conjunta com um só assinante, procuração vencida e falta de poder para alienar
+são **impeditivos**; limite de valor e exigência de anuência são atenção.
+
+**Cláusula especial posicionada (item 10).** O escrevente informa após qual
+cláusula inserir, e o documento é **renumerado** em seguida. Sem isso, inserir no
+meio produzia duas "CLÁUSULA 3ª" — e numeração repetida é devolvida pelo
+Registro de Imóveis. Em branco, mantém o comportamento anterior.
+
+### Migration
+
+`supabase/painel_definitivo.sql` — **20ª**, depois de `painel_consolidado.sql`.
+
+### Republicar
+
+`artemis-compile`, `minuta-assistente`, `artemis-extract`.
+
+---
+
 ## 2026-08-25 (d) — v8.5: secret do cartório validado antes de ir ao banco
 
 ### Corrigido

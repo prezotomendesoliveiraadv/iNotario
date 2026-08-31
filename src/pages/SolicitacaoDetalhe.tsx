@@ -6,6 +6,9 @@ import { Layout, StatusBadge } from '../components/ui'
 import { processarMinuta, sha256 } from '../lib/minutaEngine'
 import { espelharModelo, inserirClausulas } from '../lib/espelho'
 import PainelDadosAto from '../components/PainelDadosAto'
+import PainelDefinitivo from '../components/PainelDefinitivo'
+import Modal from '../components/Modal'
+import { minutaParaDocx, minutaParaPdf, baixar, subirVersaoMinuta } from '../lib/minutaArquivo'
 import { modeloAplicavel, dicionarioDoProtocolo, listarClausulasDoAto } from '../lib/modelo'
 import ArtemisPanel from '../components/ArtemisPanel'
 import DocumentosInstrucao from '../components/DocumentosInstrucao'
@@ -73,6 +76,9 @@ export default function SolicitacaoDetalhe() {
   const [minutaSel, setMinutaSel] = useState<Minuta | null>(null)
   const [loading, setLoading] = useState(true)
   const [gerando, setGerando] = useState(false)
+  const [subindo, setSubindo] = useState(false)
+  const [novoTexto, setNovoTexto] = useState('')
+  const [novaDescricao, setNovaDescricao] = useState('')
   const [erro, setErro] = useState<string | null>(null)
   const [papel, setPapel] = useState<string>('')
   const [avisoMinuta, setAvisoMinuta] = useState<{ versao: number; fonte: string | null } | null>(null)
@@ -185,6 +191,7 @@ export default function SolicitacaoDetalhe() {
         origem,
         modelo_fonte: base?.fonte ?? null,
         pendencias: pend,
+        descricao: base?.fonte ? `Geração rápida · modelo ${base.fonte}` : 'Geração rápida · template do tipo de ato',
       })
       if (error) throw error
 
@@ -194,6 +201,7 @@ export default function SolicitacaoDetalhe() {
         await supabase.from('solicitacoes').update({ status: novoStatus }).eq('id', solic.id)
       }
       await carregar()
+      setAvisoMinuta({ versao: proxVersao, fonte: base?.fonte ?? null })
     } catch (e: any) {
       setErro(e.message ?? 'Falha ao gerar minuta.')
     } finally {
@@ -289,6 +297,8 @@ export default function SolicitacaoDetalhe() {
       <div id="p-partes" />
       <PainelDadosAto solicitacaoId={solic.id} />
 
+      <PainelDefinitivo solicitacaoId={solic.id} aoAplicar={carregar} />
+
       {/* PASSO 2 — conferência das partes e dados do ato */}
       <div className="flex items-center gap-2 mb-2">
         <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-navy text-white text-xs font-bold">2</span>
@@ -349,7 +359,11 @@ export default function SolicitacaoDetalhe() {
           solicitacao={solic}
           tipo={tipo}
           partes={partes}
-          onCompiled={() => carregar()}
+          onCompiled={async (r: any) => {
+            await carregar()
+            // Item 4: toda versão gerada avisa na tela, venha de onde vier.
+            if (r?.minuta?.versao) setAvisoMinuta({ versao: r.minuta.versao, fonte: r?.modelo_fonte ?? null })
+          }}
         />
       )}
 
@@ -520,7 +534,9 @@ export default function SolicitacaoDetalhe() {
                   value={minutaSel.id}
                   onChange={(e) => setMinutaSel(minutas.find((m) => m.id === e.target.value) ?? null)}>
                   {minutas.map((m) => (
-                    <option key={m.id} value={m.id}>v{m.versao} · {m.tipo}</option>
+                    <option key={m.id} value={m.id}>
+                      v{m.versao} · {(m as any).descricao || m.tipo}
+                    </option>
                   ))}
                 </select>
               )}
@@ -528,6 +544,26 @@ export default function SolicitacaoDetalhe() {
             <pre className="whitespace-pre-wrap font-serif text-sm leading-relaxed text-ink bg-paper rounded-lg p-4 max-h-[460px] overflow-auto">
 {minutaSel.conteudo}
             </pre>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <button className="btn-ghost" style={{ padding: '.25rem .7rem', fontSize: '.78rem' }}
+                onClick={() => baixar(
+                  minutaParaDocx(minutaSel.conteudo, `${solic.protocolo} v${minutaSel.versao}`),
+                  `${solic.protocolo}-minuta-v${minutaSel.versao}.docx`)}>
+                Baixar .docx
+              </button>
+              <button className="btn-ghost" style={{ padding: '.25rem .7rem', fontSize: '.78rem' }}
+                onClick={() => minutaParaPdf(minutaSel.conteudo, `${solic.protocolo} v${minutaSel.versao}`)}>
+                Baixar PDF
+              </button>
+              <button className="btn-ghost" style={{ padding: '.25rem .7rem', fontSize: '.78rem' }}
+                onClick={() => { setNovoTexto(minutaSel.conteudo); setNovaDescricao(''); setSubindo(true) }}>
+                Subir versão editada
+              </button>
+            </div>
+            {(minutaSel as any).descricao && (
+              <div className="mt-2 text-xs text-ink/60">{(minutaSel as any).descricao}</div>
+            )}
+
             <div className="mt-2 text-[11px] text-ink/40 font-mono break-all">
               hash: {minutaSel.hash}
             </div>
@@ -580,6 +616,37 @@ export default function SolicitacaoDetalhe() {
             ))}
           </ol>}
       </div>
+      <Modal
+        aberto={subindo}
+        titulo="Subir versão editada"
+        rotuloConfirmar="Gravar como nova versão"
+        onFechar={() => setSubindo(false)}
+        onConfirmar={async () => {
+          try {
+            const r = await subirVersaoMinuta(solic.id, novoTexto, novaDescricao)
+            setSubindo(false); await carregar()
+            setAvisoMinuta({ versao: r.versao, fonte: null })
+          } catch (e: any) { setErro(e.message ?? 'Falha ao subir a versão.') }
+        }}
+      >
+        <p className="text-xs text-ink/60 mb-2">
+          Cole aqui o texto revisado. A versão atual já vem carregada — edite o que precisar.
+          Nada é sobrescrito: isto cria uma versão nova.
+        </p>
+        <label className="label">O que esta versão contém</label>
+        <input className="input" value={novaDescricao} maxLength={120}
+          placeholder="ex.: ajustes do jurídico da construtora"
+          onChange={e => setNovaDescricao(e.target.value)} />
+        <label className="label mt-2">Texto da minuta</label>
+        <textarea className="input font-mono" rows={12} value={novoTexto}
+          onChange={e => setNovoTexto(e.target.value)} />
+        <p className="text-[11px] text-ink/50 mt-2">
+          Arquivo .docx ou .pdf não é aceito aqui de propósito: extrair o texto deles no navegador
+          daria resultado incerto, e uma minuta com formatação perdida em silêncio é pior que um
+          aviso claro. Abra o arquivo, copie o texto e cole.
+        </p>
+      </Modal>
+
       {avisoMinuta && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(14,28,54,.45)', display: 'grid',
                       placeItems: 'center', padding: '1rem', zIndex: 60 }}

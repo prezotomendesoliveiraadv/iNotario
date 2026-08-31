@@ -15,6 +15,7 @@ export default function ClausulasEspeciaisCard({
      onMudou?: () => void; onMinutaAtualizada?: (r: { versao: number; fonte: string | null }) => void }) {
   const [disponiveis, setDisponiveis] = useState<Clausula[]>([])
   const [noAto, setNoAto] = useState<ClausulaDoAto[]>([])
+  const [posicao, setPosicao] = useState<Record<string, string>>({})
   const [aberta, setAberta] = useState<string | null>(null)
   const [rascunho, setRascunho] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState(false)
@@ -33,9 +34,14 @@ export default function ClausulasEspeciaisCard({
   async function inserir(c: Clausula) {
     setBusy(true); setErro(null)
     try {
+      // Posição escolhida pelo escrevente: a cláusula entra logo depois da
+      // cláusula indicada e o documento é RENUMERADO na compilação. Em branco,
+      // ela vai para antes do fecho, como antes.
+      const apos = String(posicao[c.id] ?? '').trim()
       await inserirClausulaNoAto(solicitacaoId, {
         clausula_id: c.id, nome: c.nome,
         texto: rascunho[c.id] ?? c.texto, ordem: noAto.length,
+        inserir_apos: apos === '' ? null : Number(apos),
       })
       setAberta(null); await carregar(); onMudou?.()
     } catch (e: any) { setErro(e.message) } finally { setBusy(false) }
@@ -152,6 +158,15 @@ export default function ClausulasEspeciaisCard({
                     <p className="text-[11px] text-ink/45 mt-1">
                       Ajuste os [campos] entre colchetes; a IA completa o que faltar com os dados do ato.
                     </p>
+                    <label className="label mt-2">Inserir após qual cláusula da minuta?</label>
+                    <div className="flex items-center gap-2">
+                      <input className="input" style={{ width: 96 }} inputMode="numeric"
+                        placeholder="ex.: 5" value={posicao[c.id] ?? ''}
+                        onChange={e => setPosicao(r => ({ ...r, [c.id]: e.target.value.replace(/\D/g, '') }))} />
+                      <span className="text-[11px] text-ink/50">
+                        Em branco, entra antes do fecho. As cláusulas seguintes são renumeradas.
+                      </span>
+                    </div>
                     <button className="btn-brass mt-2" disabled={busy} onClick={() => inserir(c)}>
                       {busy ? 'Inserindo…' : 'Inserir na escritura'}
                     </button>

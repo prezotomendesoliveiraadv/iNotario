@@ -201,3 +201,99 @@ export async function enviarWhatsapp(solicitacaoId: string, saidaId: string) {
   if (msg) throw new Error(msg)
   return data as any
 }
+
+// ---------------------------------------------------------------------------
+// Painel definitivo do ato
+// ---------------------------------------------------------------------------
+
+export interface CampoAplicado { campo: string; de: string | null; para: string; fonte: string }
+export interface Onus { tipo?: string; detalhe?: string; credor?: string; valor?: string }
+export interface CertidaoAto {
+  tipo: string; numero?: string; validade?: string; emitida_em?: string
+  teor?: 'negativa' | 'positiva' | 'positiva com efeitos de negativa' | 'indefinido' | string
+  origem?: string
+}
+
+/**
+ * Aplica o consolidado dos documentos aos dados DEFINITIVOS do ato.
+ *
+ * Por padrão só preenche o que está vazio: campo que o escrevente já corrigiu à
+ * mão não é revertido por uma releitura de documento. `sobrescrever` força.
+ */
+export async function aplicarConsolidado(solicitacaoId: string, sobrescrever = false): Promise<{
+  aplicados: CampoAplicado[]; onus: Onus[]; certidoes: CertidaoAto[]; total: number
+}> {
+  const { data, error } = await supabase.rpc('aplicar_consolidado', {
+    p_solicitacao: solicitacaoId, p_sobrescrever: sobrescrever,
+  })
+  if (error) throw error
+  if ((data as any)?.erro) throw new Error((data as any).erro)
+  return data as any
+}
+
+/** Texto livre do ato e a chave que decide se ele entra na minuta. */
+export async function salvarOutrasInformacoes(
+  solicitacaoId: string, texto: string, incluir: boolean,
+) {
+  const { error } = await supabase.from('solicitacoes')
+    .update({ outras_informacoes: texto, incluir_outras_informacoes: incluir })
+    .eq('id', solicitacaoId)
+  if (error) throw error
+}
+
+/** Verifica se quem assina pela vendedora tem poderes, na minuta atual. */
+export async function checkupPoderes(solicitacaoId: string) {
+  const { data, error } = await supabase.functions.invoke('minuta-assistente', {
+    body: { action: 'checkup_poderes', solicitacaoId },
+  })
+  const msg = await mensagemErroFuncao(error, data, 'minuta-assistente')
+  if (msg) throw new Error(msg)
+  return (data as any).checkup
+}
+
+/** Cláusula do contrato identificada pela IA, com a decisão do escrevente. */
+export interface ClausulaContrato {
+  tema: string
+  resumo?: string
+  trecho?: string
+  slug?: string | null
+  /** Cláusula do acervo do cartório correspondente. Nulo = não cadastrada. */
+  clausula_id?: string | null
+  pertinente: boolean
+}
+
+/** Transcreve as cláusulas do contrato para o painel definitivo. */
+export async function aplicarClausulasContrato(solicitacaoId: string): Promise<{
+  clausulas: ClausulaContrato[]; total: number; sem_acervo: number
+}> {
+  const { data, error } = await supabase.rpc('aplicar_clausulas_contrato', { p_solicitacao: solicitacaoId })
+  if (error) throw error
+  if ((data as any)?.erro) throw new Error((data as any).erro)
+  return data as any
+}
+
+/** Marca/desmarca uma cláusula como pertinente a este ato. */
+export async function marcarClausulaContrato(
+  solicitacaoId: string, tema: string, pertinente: boolean,
+) {
+  const { data } = await supabase.from('solicitacoes')
+    .select('clausulas_contrato').eq('id', solicitacaoId).maybeSingle()
+  const lista: ClausulaContrato[] = ((data as any)?.clausulas_contrato ?? []).map((c: ClausulaContrato) =>
+    c.tema === tema ? { ...c, pertinente } : c)
+  const { error } = await supabase.from('solicitacoes')
+    .update({ clausulas_contrato: lista }).eq('id', solicitacaoId)
+  if (error) throw error
+  return lista
+}
+
+/**
+ * Leva as cláusulas marcadas para as cláusulas do ato, usando a REDAÇÃO DO
+ * ACERVO. Só entram as que têm cláusula cadastrada — a IA identifica o tema,
+ * o cartório fornece o texto.
+ */
+export async function promoverClausulasContrato(solicitacaoId: string): Promise<{ inseridas: number }> {
+  const { data, error } = await supabase.rpc('promover_clausulas_contrato', { p_solicitacao: solicitacaoId })
+  if (error) throw error
+  if ((data as any)?.erro) throw new Error((data as any).erro)
+  return data as any
+}

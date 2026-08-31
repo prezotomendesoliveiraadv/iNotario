@@ -106,3 +106,13 @@ export async function lerCertidaoConstrutora(certidaoId: string) {
   if (msg) throw new Error(msg)
   return (data as any).leitura
 }
+
+/** Manda a IA ler a procuração de um representante da construtora. */
+export async function lerProcuracaoRepresentante(representanteId: string) {
+  const { data, error } = await supabase.functions.invoke('artemis-extract', {
+    body: { acao: 'procuracao_representante', representanteId },
+  })
+  const msg = await mensagemErroFuncao(error, data, 'artemis-extract')
+  if (msg) throw new Error(msg)
+  return (data as any).leitura
+}
