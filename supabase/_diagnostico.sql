@@ -44,6 +44,12 @@ union all
 select 'm21 · fn aplicar_clausulas_contrato',
        exists (select 1 from pg_proc where proname='aplicar_clausulas_contrato')
 union all
+select 'm22 · fn prontidao_ato',
+       exists (select 1 from pg_proc where proname='prontidao_ato')
+union all
+select 'm22 · fn fila_do_dia',
+       exists (select 1 from pg_proc where proname='fila_do_dia')
+union all
 -- Duas registrar_custodia = sobrecarga não removida: o PostgREST recusa a
 -- chamada com "is not unique" e a abertura de solicitação quebra.
 select 'sanidade · registrar_custodia única',

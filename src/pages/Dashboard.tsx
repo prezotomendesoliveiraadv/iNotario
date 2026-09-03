@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
+import FilaDoDia from '../components/FilaDoDia'
 import { Layout } from '../components/ui'
 import {
   carregarCockpit, competenciaDo, souCompetente, faixaIdade, brl,
@@ -241,6 +242,8 @@ export default function Dashboard() {
       {!buscando && <FaixaCompetencia c={c} />}
 
       {!buscando && <div className="cockpit-grid grid gap-5">
+        {c.cartorioId && <FilaDoDia cartorioId={c.cartorioId} papel={c.papel} />}
+
         <section>
           <div className="flex items-baseline justify-between mb-2 gap-3">
             <div>

@@ -168,6 +168,22 @@ export default function PainelDefinitivo({
               ))}
             </div>
           ) : <p className="text-xs text-ink/50">Nenhuma vinculada.</p>}
+          {certs.length > 0 && (
+            <p className="text-[11px] text-ink/50 mt-1">
+              Tipos reconhecidos para os campos da minuta:{' '}
+              {['trabalhista', 'federal', 'imobiliária'].map(k => {
+                const re = k === 'trabalhista' ? /trabalhist|cndt|tst/i
+                  : k === 'federal' ? /feder|receita|pgfn|fazenda|uni[aã]o/i
+                  : /imobili|iptu|municip|predial|prefeitura/i
+                const achou = certs.some(c => re.test(String(c.tipo ?? '')))
+                return (
+                  <span key={k} className={achou ? 'text-emerald-700' : 'text-amber-800'}>
+                    {achou ? '✓' : '○'} {k}{' '}
+                  </span>
+                )
+              })}
+            </p>
+          )}
           {certs.some(c => String(c.teor) === 'indefinido') && (
             <p className="text-[11px] text-amber-800 mt-1">
               Há certidão sem teor identificado. Confira se é negativa, positiva ou positiva com

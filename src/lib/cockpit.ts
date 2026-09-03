@@ -29,6 +29,7 @@ export interface ItemFila {
 export interface Cockpit {
   papel: string
   nome: string
+  cartorioId: string | null
   cartorioNome: string | null
   porEtapa: Record<string, number>
   minhaFila: ItemFila[]
@@ -101,7 +102,8 @@ export async function carregarCockpit(): Promise<Cockpit> {
     .select('nome, cartorio_id, cartorios(nome)').eq('id', u!.user!.id).maybeSingle()
   const cartorioId = (prof as any)?.cartorio_id
   const vazio: Cockpit = {
-    papel, nome: (prof as any)?.nome ?? '', cartorioNome: (prof as any)?.cartorios?.nome ?? null,
+    papel, nome: (prof as any)?.nome ?? '', cartorioId: cartorioId ?? null,
+    cartorioNome: (prof as any)?.cartorios?.nome ?? null,
     porEtapa: {}, minhaFila: [], emCurso: [], alertas: [],
     metricas: { concluidosMes: 0, concluidosHoje: 0, novasHoje: 0, tempoMedioDias: null, aguardandoFinanceiro: 0, valorPendente: 0 },
   }
@@ -158,7 +160,8 @@ export async function carregarCockpit(): Promise<Cockpit> {
     alertas.push({ tipo: 'financeiro', texto: `${aguardandoFinanceiro} ato(s) aguardando validação do Financeiro` })
 
   return {
-    papel, nome: (prof as any)?.nome ?? '', cartorioNome: (prof as any)?.cartorios?.nome ?? null,
+    papel, nome: (prof as any)?.nome ?? '', cartorioId,
+    cartorioNome: (prof as any)?.cartorios?.nome ?? null,
     porEtapa, minhaFila, emCurso, alertas,
     metricas: { concluidosMes: concl.length, concluidosHoje, novasHoje: novasHoje ?? 0, tempoMedioDias, aguardandoFinanceiro, valorPendente },
   }

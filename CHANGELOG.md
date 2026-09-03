@@ -1,5 +1,103 @@
 # Changelog
 
+## 2026-08-29 (b) — v9.3: semáforo de prontidão e fila do dia
+
+### Adicionado
+
+**Semáforo de prontidão no topo do ato.** Responde a uma pergunta só: este ato
+pode ser assinado hoje? Três estados — *Pronto para assinatura*, *Pode assinar,
+com ressalvas*, *Não assine ainda*.
+
+Impedimentos (vermelho): matrícula ausente ou vencida, certidão vencida,
+certidão **positiva** sem efeito de negativa, e campo `[[**...**]]` em branco na
+minuta. Atenções (âmbar): vencimento próximo, teor de certidão não identificado,
+dados ainda não aplicados, ônus na matrícula, ausência de minuta.
+
+Quando há impedimento, a lista **abre sozinha** — exigir um clique para ver o
+que trava a assinatura é esconder o que mais importa.
+
+**Fila do dia no cockpit**, com duas escolhas do escrevente, lembradas entre
+sessões:
+
+- **Ordem:** por vencimento (documento que expira primeiro) ou por ordem de
+  chegada. Nenhuma é "a certa": quem corre atrás de certidão quer vencimento;
+  quem quer justiça de fila quer chegada. Ato sem prazo conhecido vai para o
+  fim, não para o topo.
+- **Agrupamento:** nenhum, por construtora, ou por construtora **e**
+  empreendimento concatenados — que é como o cartório fala, "os cinco atos da
+  Alfa no Aurora". O grupo com o item mais urgente aparece primeiro.
+
+Cada linha traz o ponto colorido da prontidão e o prazo em dias. Há filtro de
+competência própria e um resumo dos atos com impedimento no topo.
+
+### Decisão de arquitetura
+
+A regra de prontidão vive no banco (`prontidao_ato`) e é a **mesma** que ordena
+a fila (`fila_do_dia`, via `cross join lateral`). Se existisse nos dois lugares,
+a fila diria "urgente" e a tela do ato diria "pronto" — e ninguém saberia em
+qual acreditar.
+
+### Migration
+
+`supabase/prontidao.sql` — **22ª**, depois de `clausulas_contrato.sql`.
+Só funções; nenhuma tabela ou coluna nova.
+
+### Republicar
+
+Nada. É migration + front.
+
+### Observação de desempenho
+
+`fila_do_dia` chama `prontidao_ato` por linha. Para as dezenas de atos em curso
+de um cartório, é adequado. Se a fila passar de algumas centenas, vale medir
+antes de deixar assim.
+
+---
+
+## 2026-08-29 — v9.2: certidão federal não entrava na minuta; comparação entre versões
+
+### Corrigido
+
+**`[CND FEDERAL]` ficava em branco na minuta (bug meu).** O reconhecimento do
+tipo de certidão usava o padrão literal `federal`. O nome oficial do documento é
+*"Certidão de Débitos Relativos a Créditos Tributários **Federais**"* — que não
+contém "federal". A certidão era lida, transcrita para o painel e mesmo assim o
+campo saía como `[[**CND FEDERAL**]]`.
+
+Reproduzido em teste antes da correção, com os três tipos: trabalhista e
+imobiliária passavam, federal falhava.
+
+Os padrões viraram **prefixos** (`feder`, `imobili`, `trabalhist`) e a
+comparação passou a ignorar acento — o nome vem do documento, com grafia livre.
+Acrescentei também `fazenda nacional`, `dívida ativa da união`, `prefeitura` e
+`territorial urbano`.
+
+### Adicionado
+
+**Antes e depois entre versões da minuta.** Botão *Comparar com a anterior* no
+bloco da minuta. Diff por **linha**, não por palavra: o que o escrevente precisa
+ver é qual cláusula mudou, não que "trinta" virou "quarenta" no meio de um
+parágrafo.
+
+- Linhas iguais em bloco são recolhidas, com três de contexto em volta de cada
+  mudança — numa minuta de dez páginas com dois ajustes, mostrar tudo faz a
+  mudança sumir no meio do que ficou igual. Há um botão *mostrar tudo*.
+- Diferença apenas de espaçamento não conta como alteração.
+- Implementado por LCS, sem dependência: o algoritmo cabe em vinte linhas e a
+  alternativa seria trazer uma biblioteca de diff inteira para o navegador.
+
+**Indicador de reconhecimento de certidão** no painel definitivo: mostra, para
+cada um dos três tipos que a minuta usa, se há certidão reconhecida. Certidão
+anexada com nome que o sistema não classifica aparece como não reconhecida
+**antes** de a minuta sair com o campo em branco.
+
+### Republicar
+
+`artemis-compile` e `minuta-assistente` (o módulo `_shared/espelho.ts` mudou).
+O restante é front.
+
+---
+
 ## 2026-08-28 (b) — v9.1: cláusulas do contrato chegam ao painel definitivo
 
 ### Corrigido / Adicionado

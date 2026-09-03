@@ -419,11 +419,24 @@ export function textoCertidao(c: any): string {
   return partes.join(", ");
 }
 
+/**
+ * Reconhecimento do tipo de certidão pelo nome que a IA leu do documento.
+ *
+ * Os padrões são PREFIXOS de propósito. O nome oficial da certidão federal é
+ * "Certidão de Débitos Relativos a Créditos Tributários FederaIS" — que não
+ * contém "federal". Um padrão literal deixava esse campo em branco na minuta
+ * justamente na certidão mais comum do ato.
+ */
 const TIPO_CND: Record<string, RegExp> = {
-  cnd_trabalhista: /trabalhist|cndt|tst/i,
-  cnd_federal: /federal|receita|pgfn|uni[aã]o/i,
-  cnd_imobiliaria: /imobili|iptu|municip|predial/i,
+  cnd_trabalhista: /trabalhist|cndt|\btst\b|justica do trabalho/i,
+  cnd_federal: /feder|receita|pgfn|fazenda nacional|divida ativa da uniao|uniao/i,
+  cnd_imobiliaria: /imobili|iptu|municip|predial|territorial urban|prefeitura/i,
 };
+
+/** Sem acento e em minúsculas — o nome vem do documento, com grafia livre. */
+function semAcento(s: string): string {
+  return String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
 
 /**
  * Acrescenta ao dicionário os campos que só existem no painel definitivo:
@@ -439,7 +452,7 @@ export function enriquecerComPainel(
 
   const certs: any[] = painel?.certidoes ?? [];
   for (const [chave, re] of Object.entries(TIPO_CND)) {
-    const c = certs.find((x) => re.test(String(x?.tipo ?? "")));
+    const c = certs.find((x) => re.test(semAcento(x?.tipo ?? "")));
     if (c) out[chave] = textoCertidao(c);
   }
   // Lista completa, para modelos que trazem um campo único de certidões.

@@ -8,6 +8,8 @@ import { espelharModelo, inserirClausulas } from '../lib/espelho'
 import PainelDadosAto from '../components/PainelDadosAto'
 import PainelDefinitivo from '../components/PainelDefinitivo'
 import Modal from '../components/Modal'
+import DiffMinuta from '../components/DiffMinuta'
+import SemaforoProntidao from '../components/SemaforoProntidao'
 import { minutaParaDocx, minutaParaPdf, baixar, subirVersaoMinuta } from '../lib/minutaArquivo'
 import { modeloAplicavel, dicionarioDoProtocolo, listarClausulasDoAto } from '../lib/modelo'
 import ArtemisPanel from '../components/ArtemisPanel'
@@ -77,6 +79,7 @@ export default function SolicitacaoDetalhe() {
   const [loading, setLoading] = useState(true)
   const [gerando, setGerando] = useState(false)
   const [subindo, setSubindo] = useState(false)
+  const [comparando, setComparando] = useState<string | null>(null)
   const [novoTexto, setNovoTexto] = useState('')
   const [novaDescricao, setNovaDescricao] = useState('')
   const [erro, setErro] = useState<string | null>(null)
@@ -295,6 +298,8 @@ export default function SolicitacaoDetalhe() {
       )}
 
       <div id="p-partes" />
+      <SemaforoProntidao solicitacaoId={solic.id} />
+
       <PainelDadosAto solicitacaoId={solic.id} />
 
       <PainelDefinitivo solicitacaoId={solic.id} aoAplicar={carregar} />
@@ -559,7 +564,36 @@ export default function SolicitacaoDetalhe() {
                 onClick={() => { setNovoTexto(minutaSel.conteudo); setNovaDescricao(''); setSubindo(true) }}>
                 Subir versão editada
               </button>
+              {minutas.length > 1 && (
+                <button className="btn-ghost" style={{ padding: '.25rem .7rem', fontSize: '.78rem' }}
+                  onClick={() => {
+                    // Compara com a versão imediatamente anterior a esta.
+                    const idx = minutas.findIndex(m => m.id === minutaSel.id)
+                    const ant = minutas[idx + 1]
+                    setComparando(ant?.id ?? null)
+                  }}>
+                  Comparar com a anterior
+                </button>
+              )}
             </div>
+            {comparando && (() => {
+              const ant = minutas.find(m => m.id === comparando)
+              if (!ant) return null
+              return (
+                <div className="mt-3 p-3 rounded-lg bg-paper">
+                  <div className="flex items-center justify-between mb-2">
+                    <b className="text-sm text-navy">Antes e depois</b>
+                    <button className="btn-ghost" style={{ padding: '.15rem .6rem', fontSize: '.72rem' }}
+                      onClick={() => setComparando(null)}>fechar</button>
+                  </div>
+                  <DiffMinuta
+                    anterior={ant.conteudo} atual={minutaSel.conteudo}
+                    rotuloA={`v${ant.versao}`} rotuloB={`v${minutaSel.versao}`}
+                  />
+                </div>
+              )
+            })()}
+
             {(minutaSel as any).descricao && (
               <div className="mt-2 text-xs text-ink/60">{(minutaSel as any).descricao}</div>
             )}
