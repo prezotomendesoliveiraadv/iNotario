@@ -1,7 +1,7 @@
 import { supabase } from './supabase'
 import { mensagemErroFuncao } from './erros'
 
-export type TipoDocInstrucao = 'rg' | 'cnh' | 'matricula' | 'certidao' | 'procuracao' | 'compromisso' | 'outro'
+export type TipoDocInstrucao = 'rg' | 'cnh' | 'matricula' | 'certidao' | 'procuracao' | 'compromisso' | 'comprovante_endereco' | 'outro'
 
 /** Confronto do contrato com a matrícula do imóvel. */
 export interface ItemConfronto {
@@ -20,6 +20,7 @@ export const TIPOS_DOC_INSTRUCAO: { v: TipoDocInstrucao; label: string }[] = [
   { v: 'cnh', label: 'CNH (habilitação)' },
   { v: 'matricula', label: 'Matrícula do imóvel' },
   { v: 'compromisso', label: 'Compromisso de compra e venda' },
+  { v: 'comprovante_endereco', label: 'Comprovante de endereço' },
   { v: 'certidao', label: 'Certidão (com validade)' },
   { v: 'procuracao', label: 'Procuração (com validade)' },
   { v: 'outro', label: 'Outro' },
@@ -34,6 +35,7 @@ export interface Documento {
   extraido: Record<string, any> | null; status: 'pendente' | 'extraido' | 'validado'
   confronto?: Confronto | null
   vinculado?: boolean
+  parte_id?: string | null
   validade_ate?: string | null
   created_at: string
 }
@@ -115,4 +117,42 @@ export async function lerProcuracaoRepresentante(representanteId: string) {
   const msg = await mensagemErroFuncao(error, data, 'artemis-extract')
   if (msg) throw new Error(msg)
   return (data as any).leitura
+}
+
+/**
+ * Vincula o documento a uma parte e, sendo comprovante de endereço, copia a
+ * qualificação de endereço para ela.
+ *
+ * A pergunta "de quem é este endereço?" não pode ser adivinhada: dois
+ * compradores anexam dois comprovantes, e endereço errado em escritura é
+ * defeito que só aparece no Registro.
+ */
+export async function vincularDocumentoAParte(
+  documentoId: string, parteId: string,
+): Promise<{ aplicado: boolean; titularDivergente?: string }> {
+  const { data: doc } = await supabase.from('documentos')
+    .select('extraido, tipo').eq('id', documentoId).maybeSingle()
+  const { error } = await supabase.from('documentos').update({ parte_id: parteId }).eq('id', documentoId)
+  if (error) throw error
+
+  const e = (doc as any)?.extraido
+  if ((doc as any)?.tipo !== 'comprovante_endereco' || !e) return { aplicado: false }
+
+  const { data: parte } = await supabase.from('partes')
+    .select('nome, dados').eq('id', parteId).maybeSingle()
+  const dados = { ...((parte as any)?.dados ?? {}) }
+
+  const rua = [e.logradouro, e.numero, e.complemento].filter(Boolean).join(', ')
+  if (rua) dados.endereco = rua
+  if (e.bairro) dados.bairro = e.bairro
+  if (e.cidade || e.uf) dados.cidade = [e.cidade, e.uf].filter(Boolean).join('/')
+  if (e.cep) dados.cep = e.cep
+
+  const { error: e2 } = await supabase.from('partes').update({ dados }).eq('id', parteId)
+  if (e2) throw e2
+
+  // Titular diferente da parte não impede — mas quem lavra precisa saber.
+  const norm = (s: string) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
+  const divergente = e.titular && (parte as any)?.nome && norm(e.titular) !== norm((parte as any).nome)
+  return { aplicado: true, titularDivergente: divergente ? e.titular : undefined }
 }

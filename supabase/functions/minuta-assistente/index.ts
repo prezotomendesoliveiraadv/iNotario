@@ -13,7 +13,7 @@ import { corsHeaders, json } from "../_shared/cors.ts";
 import { respostaErro } from "../_shared/erros.ts";
 import { callModel, callModelJson, sha256, PROVEDOR_ATIVO, MODELO_ATIVO, gravarUso } from "../_shared/artemis.ts";
 
-import { espelharModelo, dicionarioDoAto, inserirClausulas, enriquecerComPainel } from "../_shared/espelho.ts";
+import { espelharModelo, dicionarioDoAto, inserirClausulas, enriquecerComPainel, enriquecerComPartes } from "../_shared/espelho.ts";
 
 async function contexto(admin: any, solicitacaoId: string) {
   const { data: sol } = await admin.from("solicitacoes")
@@ -147,7 +147,7 @@ Responda APENAS com JSON:
         }
         // O painel da tela e a minuta leem a MESMA consolidação: sem isto, o
         // escrevente confere um valor na tela e a escritura sai com outro.
-        const esp = espelharModelo(ctx.modeloTexto, enriquecerComPainel({
+        const esp = espelharModelo(ctx.modeloTexto, enriquecerComPartes(enriquecerComPainel({
           ...dicionarioDoAto({
             solicitacao: ctx.sol, partes: ctx.partes,
             imovel: pega("matricula") ?? ctx.sol?.dados,
@@ -155,7 +155,7 @@ Responda APENAS com JSON:
             empreendimento: ctx.sol?.empreendimentos, cartorio: ctx.sol?.cartorios,
           }),
           ...doPainel,
-        }, cons));
+        }, cons), ctx.partes ?? []));
         texto = esp.texto;
         origemTexto = "espelho_modelo";
         pendencias = esp.pendentes;

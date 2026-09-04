@@ -1,5 +1,120 @@
 # Changelog
 
+## 2026-08-30 (b) — v9.5: versão vigente e cartório no rodapé
+
+### Adicionado
+
+**Rodapé em todas as telas internas**, com o nome do cartório à esquerda e a
+versão do sistema à direita. Discreto: uma linha cinza abaixo do conteúdo.
+
+**Clicando na versão**, abre a conferência das camadas:
+
+- versão da aplicação e data de publicação;
+- **até qual migration o banco foi aplicado**, comparada com a que esta versão
+  espera;
+- aviso em âmbar quando o banco está defasado — que aparece já na linha do
+  rodapé, sem precisar abrir.
+
+A descoberta da migration é **indireta**: testa as funções que cada uma cria
+(`consolidar_ato`, `aplicar_consolidado`, `aplicar_clausulas_contrato`,
+`prontidao_ato`, `representantes_do_ato`). Assim não exige tabela de controle de
+versão e funciona em qualquer instalação, inclusive nas antigas.
+
+`src/lib/versao.ts` é a fonte única: ao publicar, altere ali e em nenhum outro
+lugar.
+
+### Por que isto existe
+
+Durante a implantação da v8, deploys "bem-sucedidos" subiram código antigo por
+duas sessões seguidas, e não havia como olhar a tela e saber o que estava no ar.
+A pergunta "como descubro se a 9.1 está rodando?" não tinha resposta direta —
+agora tem.
+
+### Limitação declarada
+
+O rodapé confere aplicação e banco. **Não verifica qual código está publicado
+nas Edge Functions** — isso continua exigindo o teste funcional. O próprio
+painel diz isso, para não dar falsa segurança.
+
+### Migration
+
+Nenhuma. É só front.
+
+---
+
+## 2026-08-30 — v9.4: fila clicável, qualificação completa, procuradores no ato
+
+### Corrigido
+
+**Clicar num protocolo da fila do dia não abria o ato (item 1).** A rota é
+`/s/:id`; eu escrevi `/solicitacao/:id` no link. O React Router não casava e
+nada acontecia. Varri o projeto: era o único uso errado.
+
+**Cabeçalho de cláusula lia texto do corpo como numeral (item 5).** Uma linha
+do corpo começando com "X." ou "V." era tratada como cláusula romana: a
+contagem inflava e a renumeração saía errada. O reconhecimento passou a exigir
+a palavra "cláusula" para romanos e extenso; sem ela, só algarismo seguido de
+título em maiúsculas.
+
+**Pessoa jurídica saía qualificada como pessoa física** — "brasileiro(a),
+residente e domiciliado(a)". Agora tem redação própria: pessoa jurídica de
+direito privado, CNPJ, sede, representante.
+
+**Leitura de certidão revisada (item 6).** A instrução passou a alertar sobre a
+inversão de dia/mês, a distinguir o número de controle do CPF/CNPJ e do
+protocolo, a exigir o nome do órgão em `certidao_tipo` (é o que classifica o
+tipo), e a proibir o chute de "negativa" — esse teor entra literalmente na
+escritura.
+
+### Adicionado
+
+**Qualificação completa (itens 4 e 7).** Novos campos na parte: nacionalidade,
+RG com órgão expedidor e data, endereço em partes (rua, bairro, cidade/UF, CEP)
+e a qualificação do cônjuge.
+
+- **Regime de bens** só aparece para casado ou união estável.
+- **Cônjuge** só é pedido quando há outorga a colher — some na separação total.
+  A separação **obrigatória** fica de fora dessa exceção de propósito: a Súmula
+  377 do STF admite comunicação de aquestos, e a prudência recomenda a anuência.
+- `[QUALIFICAÇÃO COMPLETA DO COMPRADOR]`, `[QUALIFICAÇÃO DA VENDEDORA]` e
+  `[QUALIFICAÇÃO DAS PARTES]` passam a ser preenchidos com a redação notarial
+  montada pelo sistema — não pelo modelo de linguagem, para que a mesma pessoa
+  saia com a mesma redação em todos os atos.
+
+**Comprovante de endereço (item 4).** Novo tipo de documento com leitura por IA.
+Ao vincular, o sistema **pergunta a qual parte** — dois compradores anexam dois
+comprovantes, e adivinhar endereço em escritura é errar. Se o titular do
+comprovante divergir do nome da parte, avisa sem bloquear.
+
+**Quem assina pela vendedora, na tela do ato (item 3).** Card novo com a regra
+de representação do contrato social e, por representante, os poderes efetivos
+em três respostas diretas — alienar imóveis, dar garantia, substabelecer —
+mais restrições, limite de valor e validade da procuração. Poder não lido é
+exibido como **não lido**, nunca como existente.
+
+Procuração vencida de quem assina passou a ser **impedimento no semáforo**.
+
+**Posicionamento de cláusula em qualquer grafia (item 5).** Reconhece
+`CLÁUSULA 3ª`, `CLÁUSULA III` e `CLÁUSULA TERCEIRA`, e a renumeração
+**preserva a grafia do modelo** — documento em romanos continua em romanos.
+Não encontrando a posição indicada, procura o marcador `[CLÁUSULA ESPECIAL]`
+antes de recorrer ao fim do documento.
+
+**Leitura de procuração (item 2)** já existia desde a v9.0 no cadastro; o
+upload também. O que faltava era o resultado chegar ao ato — ver acima.
+
+### Migration
+
+`supabase/procuradores_ato.sql` — **23ª**, depois de `prontidao.sql`. Altera
+também `prontidao.sql` (chamada tolerante a `prontidao_poderes`, para que a 22ª
+continue funcionando sozinha).
+
+### Republicar
+
+`artemis-extract`, `artemis-compile`, `minuta-assistente`.
+
+---
+
 ## 2026-08-29 (b) — v9.3: semáforo de prontidão e fila do dia
 
 ### Adicionado

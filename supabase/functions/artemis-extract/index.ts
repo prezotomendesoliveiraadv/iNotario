@@ -31,8 +31,20 @@ Extraia e responda SOMENTE com:
 { "certidao_tipo":"", "orgao_emissor":"", "numero":"", "emitida_em":"AAAA-MM-DD",
   "validade":"AAAA-MM-DD", "prazo_dias":0, "resultado":"negativa|positiva|positiva com efeito de negativa|indefinido",
   "titular":"", "cpf_cnpj":"", "observacoes":"" }
-Regras: datas SEMPRE em AAAA-MM-DD. Se a certidão indicar apenas prazo de validade em dias (ex.: "válida por 90 dias"),
-preencha "prazo_dias" e calcule "validade" a partir da emissão. Se a validade não constar, deixe "" — não invente.`;
+Regras:
+- Datas SEMPRE em AAAA-MM-DD. Atenção ao formato do documento: 03/08/2026 é 2026-08-03, não 2026-03-08.
+- "numero" é o número de CONTROLE/AUTENTICAÇÃO da certidão, geralmente no cabeçalho ou rodapé. Copie
+  exatamente como está, com pontos, barras e traços. Não confunda com CPF/CNPJ do titular nem com
+  número de protocolo de emissão.
+- Se houver apenas prazo em dias ("válida por 90 dias", "eficácia de 180 dias"), preencha "prazo_dias"
+  E calcule "validade" a partir da emissão.
+- "resultado" transcreve o TEOR: negativa; positiva; ou "positiva com efeito de negativa" (a CND que
+  reconhece débito com exigibilidade suspensa). Se o documento não permitir concluir, use "indefinido"
+  — nunca chute "negativa", porque esse teor entra literalmente na escritura.
+- "certidao_tipo" deve conter o nome do órgão ou o objeto, para que o sistema classifique o tipo:
+  ex. "Certidão Negativa de Débitos Trabalhistas", "Certidão de Débitos Relativos a Créditos
+  Tributários Federais e à Dívida Ativa da União", "Certidão Negativa de Tributos Imobiliários".
+- Não invente. Campo ausente vai como "".`;
   }
   if (tipo === "procuracao") {
     return `Procuração (pública ou particular). Extraia e responda SOMENTE com:
@@ -43,6 +55,17 @@ preencha "prazo_dias" e calcule "validade" a partir da emissão. Se a validade n
 Regras: datas em AAAA-MM-DD. "poderes_para_alienar" só true se houver poderes EXPRESSOS para vender/alienar/dar quitação.
 Se o instrumento não indicar prazo, deixe "validade" vazia e descreva em "prazo" (ex.: "sem prazo determinado"). Não invente.`;
   }
+  if (tipo === "comprovante_endereco") {
+    return `Comprovante de endereço (conta de consumo, fatura, contrato de locação).
+
+Responda SOMENTE com:
+{ "titular":"", "logradouro":"", "numero":"", "complemento":"", "bairro":"",
+  "cidade":"", "uf":"", "cep":"", "emissor":"", "data_referencia":"AAAA-MM-DD" }
+
+Regras: "titular" é o nome que consta no documento — pode NÃO ser o da parte, e isso importa.
+"data_referencia" é a competência ou o vencimento, o que estiver mais visível. Não invente CEP.`;
+  }
+
   if (tipo === "compromisso" || tipo === "contrato") {
     return `Compromisso/contrato particular de compra e venda de imóvel. Extraia e responda SOMENTE com:
 { "vendedores":[ {"nome":"","cpf_cnpj":"","estado_civil":"","regime_bens":"","profissao":"","endereco":""} ],

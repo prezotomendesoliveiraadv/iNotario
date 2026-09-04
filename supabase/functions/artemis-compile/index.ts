@@ -20,7 +20,7 @@ import {
   type Modo, type Contexto, type Msg, gravarUso } from "../_shared/artemis.ts";
 import { criarCofre, type Entidade } from "../_shared/tokenizer.ts";
 import { clausulasMatricula, analisarMatricula } from "../_shared/matricula.ts";
-import { espelharModelo, dicionarioDoAto, inserirClausulas, enriquecerComPainel } from "../_shared/espelho.ts";
+import { espelharModelo, dicionarioDoAto, inserirClausulas, enriquecerComPainel, enriquecerComPartes } from "../_shared/espelho.ts";
 
 const ESQUEMA_ELABORACAO = `Responda SOMENTE com um objeto JSON válido (sem texto fora do JSON, sem cercas de código), no formato:
 {
@@ -220,7 +220,7 @@ mantendo a numeração sequencial do documento. Não altere o efeito jurídico d
         empreendimento: sol?.empreendimentos,
         cartorio: sol?.cartorios,
       });
-      const dic = enriquecerComPainel({ ...dicBase, ...doPainel }, cons);
+      const dic = enriquecerComPartes(enriquecerComPainel({ ...dicBase, ...doPainel }, cons), (partesEsp as any[]) ?? []);
 
       const esp = espelharModelo(modeloTexto, dic);
       conteudo = esp.texto;

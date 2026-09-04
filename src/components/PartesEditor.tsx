@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CAMPOS_PARTE, agruparPorPapel, type ParteRow } from '../lib/melhorias'
+import { camposVisiveis, exigeConjuge, agruparPorPapel, type ParteRow } from '../lib/melhorias'
 
 /**
  * Edita N partes por papel. O cartório pensa por grupo de qualificação
@@ -77,7 +77,7 @@ export default function PartesEditor({
 
                   {expandida && (
                     <div className="grid gap-2 mt-2" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }}>
-                      {CAMPOS_PARTE.map(c => (
+                      {camposVisiveis(p.dados ?? {}).map((c: any) => (
                         <label key={c.k} className="text-[11px] text-ink/60">
                           {c.label}
                           {c.tipo === 'select' ? (
@@ -87,11 +87,18 @@ export default function PartesEditor({
                               {(c as any).opcoes.map((o: string) => <option key={o} value={o}>{o}</option>)}
                             </select>
                           ) : (
-                            <input className="input" value={(p.dados ?? {})[c.k] ?? ''}
+                            <input className="input" type={c.tipo === 'date' ? 'date' : 'text'}
+                              value={(p.dados ?? {})[c.k] ?? ''}
                               onChange={e => setDado(i, c.k, e.target.value)} />
                           )}
                         </label>
                       ))}
+                      {exigeConjuge(p.dados ?? {}) && (
+                        <p className="text-[11px] text-ink/45" style={{ gridColumn: '1/-1' }}>
+                          O regime exige a outorga do cônjuge — por isso a qualificação dele é pedida.
+                          Na separação total de bens estes campos não aparecem.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>

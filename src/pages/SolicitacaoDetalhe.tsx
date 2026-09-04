@@ -10,6 +10,7 @@ import PainelDefinitivo from '../components/PainelDefinitivo'
 import Modal from '../components/Modal'
 import DiffMinuta from '../components/DiffMinuta'
 import SemaforoProntidao from '../components/SemaforoProntidao'
+import RepresentantesDoAto from '../components/RepresentantesDoAto'
 import { minutaParaDocx, minutaParaPdf, baixar, subirVersaoMinuta } from '../lib/minutaArquivo'
 import { modeloAplicavel, dicionarioDoProtocolo, listarClausulasDoAto } from '../lib/modelo'
 import ArtemisPanel from '../components/ArtemisPanel'
@@ -303,6 +304,8 @@ export default function SolicitacaoDetalhe() {
       <PainelDadosAto solicitacaoId={solic.id} />
 
       <PainelDefinitivo solicitacaoId={solic.id} aoAplicar={carregar} />
+
+      <RepresentantesDoAto solicitacaoId={solic.id} />
 
       {/* PASSO 2 — conferência das partes e dados do ato */}
       <div className="flex items-center gap-2 mb-2">

@@ -17,16 +17,62 @@ export interface ParteRow {
   ordem: number
 }
 
+/**
+ * Qualificação da parte, na ordem em que a escritura a recita.
+ *
+ * `cond` esconde o campo quando ele não se aplica: regime de bens só existe
+ * para quem é casado ou vive em união estável, e os dados do cônjuge só são
+ * pedidos quando ele participa do ato — na separação total de bens não há
+ * outorga a colher, e pedir a qualificação dele seria coletar dado pessoal
+ * sem necessidade.
+ */
 export const CAMPOS_PARTE = [
+  { k: 'nacionalidade', label: 'Nacionalidade', tipo: 'text' },
   { k: 'estado_civil', label: 'Estado civil', tipo: 'select',
     opcoes: ['solteiro(a)', 'casado(a)', 'divorciado(a)', 'viúvo(a)', 'união estável'] },
   { k: 'regime_bens', label: 'Regime de bens', tipo: 'select',
-    opcoes: ['comunhão parcial', 'comunhão universal', 'separação total', 'separação obrigatória', 'participação final nos aquestos'] },
+    opcoes: ['comunhão parcial', 'comunhão universal', 'separação total', 'separação obrigatória', 'participação final nos aquestos'],
+    cond: (d: any) => /casad|uni[ãa]o est[áa]vel/i.test(String(d?.estado_civil ?? '')) },
   { k: 'profissao', label: 'Profissão', tipo: 'text' },
-  { k: 'rg', label: 'RG / órgão', tipo: 'text' },
-  { k: 'endereco', label: 'Endereço', tipo: 'text' },
+  { k: 'rg', label: 'RG / CNH — número', tipo: 'text' },
+  { k: 'rg_orgao', label: 'Órgão expedidor', tipo: 'text' },
+  { k: 'rg_emissao', label: 'Data de expedição', tipo: 'date' },
+  { k: 'endereco', label: 'Endereço (rua, nº, compl.)', tipo: 'text' },
+  { k: 'bairro', label: 'Bairro', tipo: 'text' },
+  { k: 'cidade', label: 'Cidade / UF', tipo: 'text' },
+  { k: 'cep', label: 'CEP', tipo: 'text' },
   { k: 'email', label: 'E-mail', tipo: 'text' },
+
+  // --- cônjuge: só quando há outorga a colher ---
+  { k: 'conjuge_nome', label: 'Cônjuge — nome', tipo: 'text', conjuge: true },
+  { k: 'conjuge_cpf', label: 'Cônjuge — CPF', tipo: 'text', conjuge: true },
+  { k: 'conjuge_rg', label: 'Cônjuge — RG / órgão', tipo: 'text', conjuge: true },
+  { k: 'conjuge_nacionalidade', label: 'Cônjuge — nacionalidade', tipo: 'text', conjuge: true },
+  { k: 'conjuge_profissao', label: 'Cônjuge — profissão', tipo: 'text', conjuge: true },
 ] as const
+
+/**
+ * O cônjuge entra na qualificação quando a pessoa é casada ou vive em união
+ * estável — EXCETO na separação total de bens, em que não há outorga.
+ *
+ * A separação OBRIGATÓRIA fica de fora desta exceção de propósito: a
+ * jurisprudência admite comunicação de aquestos (Súmula 377 do STF), e a
+ * prudência notarial recomenda colher a anuência.
+ */
+export function exigeConjuge(d: any): boolean {
+  const ec = String(d?.estado_civil ?? '')
+  if (!/casad|uni[ãa]o est[áa]vel/i.test(ec)) return false
+  return !/separa[çc][ãa]o total/i.test(String(d?.regime_bens ?? ''))
+}
+
+/** Campos visíveis para esta parte, dado o que já foi preenchido. */
+export function camposVisiveis(d: any) {
+  return CAMPOS_PARTE.filter((c: any) => {
+    if (c.conjuge) return exigeConjuge(d)
+    if (c.cond) return c.cond(d)
+    return true
+  })
+}
 
 export async function listarPartes(solicitacaoId: string): Promise<ParteRow[]> {
   const { data } = await supabase.from('partes')

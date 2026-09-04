@@ -173,7 +173,7 @@ export default function FilaDoDia({ cartorioId, papel }: { cartorioId: string; p
           )}
           <div className="space-y-1">
             {g.itens.map(i => (
-              <Link key={i.id} to={`/solicitacao/${i.id}`}
+              <Link key={i.id} to={`/s/${i.id}`}
                 className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-paper transition-colors">
                 <span className={`inline-block rounded-full shrink-0 ${PONTO[i.situacao]}`}
                   style={{ width: 8, height: 8 }} />

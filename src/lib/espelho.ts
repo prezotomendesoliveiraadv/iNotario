@@ -95,6 +95,15 @@ const SINONIMOS: Record<string, string[]> = {
   cnd_federal: ["cnd federal", "certidao federal", "certidao negativa de debitos federais", "cnd receita federal", "receita federal"],
   cnd_imobiliaria: ["cnd tributos imobiliarios", "certidao de tributos imobiliarios", "iptu", "certidao municipal", "tributos municipais"],
   outras_informacoes: ["outras informacoes", "informacoes adicionais", "observacoes"],
+  qualificacao_completa: ["qualificacao completa", "qualificacao das partes", "qualificacao"],
+  qualificacao_comprador: [
+    "qualificacao completa do comprador", "qualificacao do comprador", "qualificacao comprador",
+    "qualificacao completa do adquirente", "qualificacao do adquirente",
+  ],
+  qualificacao_vendedor: [
+    "qualificacao completa do vendedor", "qualificacao do vendedor", "qualificacao vendedor",
+    "qualificacao da vendedora", "qualificacao completa da vendedora",
+  ],
   cartorio_nome: ["cartorio", "tabeliao", "serventia", "nome do cartorio"],
   cidade: ["cidade", "municipio", "comarca"],
   data_ato: ["data do ato", "data da escritura", "data de hoje"],
@@ -300,9 +309,11 @@ export function inserirClausulas(
       // O número aqui é provisório: renumerar() reescreve tudo em sequência no
       // fim. O que importa é o cabeçalho existir, senão a cláusula inserida não
       // entra na contagem e o documento fica com numeração repetida.
+      // Adota a grafia dominante do modelo: inserir "CLÁUSULA 3ª" num documento
+      // que usa "CLÁUSULA III" descaracteriza a redação aprovada.
       t = inserirApos(
         t, Number(c.inserir_apos),
-        `CLÁUSULA 0ª — ${String(c.nome ?? "").toUpperCase()}\n${String(c.texto).trim()}`,
+        `${cabecalhoNoEstilo(t)} — ${String(c.nome ?? "").toUpperCase()}\n${String(c.texto).trim()}`,
       );
     }
     const soltas = uteis.filter((c) => !Number.isFinite(Number(c.inserir_apos)));
@@ -334,17 +345,90 @@ export function inserirClausulas(
   return { texto: `${texto.trimEnd()}\n\n${bloco}\n`, posicao: "final", inseridas: uteis.length };
 }
 
-/** Cabeçalho de cláusula: "CLÁUSULA 3ª", "Cláusula Terceira", "3." no início da linha. */
-const CABECALHO = /^\s*(?:cl[áa]usula\s+)?(\d{1,2})\s*[ªº.\-–—:)]/i;
+// ---------------------------------------------------------------------------
+// Reconhecimento do cabeçalho de cláusula
+//
+// Modelos de construtora numeram de todo jeito: "CLÁUSULA 3ª", "CLÁUSULA III",
+// "Cláusula Terceira", "3." ou "TERCEIRA —". Reconhecer só o algarismo fazia a
+// posição escolhida pelo escrevente não ser encontrada, e a cláusula caía no
+// fim do documento sem aviso.
+// ---------------------------------------------------------------------------
+
+const ORDINAIS: Record<string, number> = {
+  primeira: 1, primeiro: 1, segunda: 2, segundo: 2, terceira: 3, terceiro: 3,
+  quarta: 4, quarto: 4, quinta: 5, quinto: 5, sexta: 6, sexto: 6,
+  setima: 7, setimo: 7, oitava: 8, oitavo: 8, nona: 9, nono: 9,
+  decima: 10, decimo: 10, undecima: 11, undecimo: 11, "decima primeira": 11,
+  duodecima: 12, duodecimo: 12, "decima segunda": 12, "decima terceira": 13,
+  "decima quarta": 14, "decima quinta": 15, "decima sexta": 16,
+  "decima setima": 17, "decima oitava": 18, "decima nona": 19, vigesima: 20, vigesimo: 20,
+};
+
+const ROMANOS: Record<string, number> = {
+  i: 1, ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10,
+  xi: 11, xii: 12, xiii: 13, xiv: 14, xv: 15, xvi: 16, xvii: 17, xviii: 18, xix: 19, xx: 20,
+};
+
+/**
+ * Cabeçalho de cláusula. Duas formas aceitas, e a distinção importa:
+ *
+ *   1. com a palavra "cláusula" — aceita algarismo, romano ou extenso;
+ *   2. sem ela — SÓ algarismo, e exigindo um título em maiúsculas na sequência.
+ *
+ * Sem essa restrição, uma linha do CORPO começando com "X." ou "V." era lida
+ * como numeral romano e renumerada. O texto da cláusula virava cabeçalho, a
+ * contagem inflava e a numeração final saía errada.
+ */
+const CAB_COM_PALAVRA = /^\s*cl[áa]usula\s+([0-9]{1,2}|[ivxIVX]{1,6}|[a-zà-úA-ZÀ-Ú]+(?:\s+[a-zà-úA-ZÀ-Ú]+)?)\s*[ªº°.\-–—:)\s]/i;
+const CAB_SO_NUMERO = /^\s*([0-9]{1,2})\s*[ªº°.\-–—:)]\s+[\p{Lu}]{3}/u;
+
+function casarCabecalho(l: string): { bruto: string; comPalavra: boolean } | null {
+  const a = CAB_COM_PALAVRA.exec(l);
+  if (a) return { bruto: a[1], comPalavra: true };
+  const b = CAB_SO_NUMERO.exec(l);
+  if (b) return { bruto: b[1], comPalavra: false };
+  return null;
+}
+
+/** Marcador livre para a cláusula especial, quando não há posição indicada. */
+const MARCA_CLAUSULA_SIMPLES = /\[\[?\s*cl[áa]usula\s+especial\s*\]?\]/i;
+
+function semAcentoBaixa(s: string): string {
+  return String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+}
+
+/** Converte o rótulo lido (algarismo, romano ou extenso) em número. */
+export function numeroDoRotulo(bruto: string): number | null {
+  const t = semAcentoBaixa(bruto);
+  if (!t) return null;
+  if (/^\d{1,2}$/.test(t)) return Number(t);
+  if (ROMANOS[t] !== undefined) return ROMANOS[t];
+  if (ORDINAIS[t] !== undefined) return ORDINAIS[t];
+  return null;
+}
 
 /** Todas as cláusulas do texto, com o índice da linha em que começam. */
 export function numerarClausulas(texto: string): { numero: number; linha: number }[] {
   const out: { numero: number; linha: number }[] = [];
   texto.split("\n").forEach((l, i) => {
-    const m = CABECALHO.exec(l);
-    if (m) out.push({ numero: Number(m[1]), linha: i });
+    const m = casarCabecalho(l);
+    if (!m) return;
+    const n = numeroDoRotulo(m.bruto);
+    if (n !== null) out.push({ numero: n, linha: i });
   });
   return out;
+}
+
+/** Grafia predominante dos cabeçalhos, para o cabeçalho provisório da inserção. */
+function cabecalhoNoEstilo(texto: string): string {
+  for (const l of texto.split("\n")) {
+    const m = CAB_COM_PALAVRA.exec(l);
+    if (!m) continue;
+    if (/^\d{1,2}$/.test(m[1])) return "CLÁUSULA 0ª";
+    if (/^[ivxIVX]{1,6}$/.test(m[1])) return "CLÁUSULA I";
+    return "CLÁUSULA PRIMEIRA";
+  }
+  return "CLÁUSULA 0ª";
 }
 
 /** Insere um bloco imediatamente após o fim da cláusula de número informado. */
@@ -352,7 +436,15 @@ function inserirApos(texto: string, numero: number, bloco: string): string {
   const linhas = texto.split("\n");
   const marcos = numerarClausulas(texto);
   const alvo = marcos.find((m) => m.numero === numero);
-  if (!alvo) return `${texto.trimEnd()}\n\n${bloco}\n`;
+  if (!alvo) {
+    // Posição não encontrada: antes de jogar ao final, procurar o marcador
+    // livre que o modelo pode trazer.
+    if (MARCA_CLAUSULA_SIMPLES.test(texto)) return texto.replace(MARCA_CLAUSULA_SIMPLES, bloco);
+    const linhasF = texto.split("\n");
+    const idxF = linhasF.findIndex((l) => INICIO_FECHO.test(l));
+    if (idxF > 0) { linhasF.splice(idxF, 0, "", bloco, ""); return linhasF.join("\n"); }
+    return `${texto.trimEnd()}\n\n${bloco}\n`;
+  }
 
   const seguinte = marcos.find((m) => m.linha > alvo.linha);
   const onde = seguinte ? seguinte.linha : linhas.length;
@@ -368,15 +460,26 @@ function inserirApos(texto: string, numero: number, bloco: string): string {
  * Registro de Imóveis.
  */
 export function renumerar(texto: string): string {
+  // Preserva a GRAFIA de cada cabeçalho: modelo em romanos continua em
+  // romanos, por extenso continua por extenso. Trocar tudo por algarismo
+  // descaracterizaria a redação que a construtora aprovou.
+  const romano = (n: number) => Object.keys(ROMANOS).find((k) => ROMANOS[k] === n)?.toUpperCase() ?? String(n);
+  const extenso = (n: number) => Object.keys(ORDINAIS).find((k) => ORDINAIS[k] === n) ?? String(n);
+  const capitalizar = (t: string) => t.replace(/\b\p{L}/gu, (c) => c.toUpperCase());
+
   let n = 0;
   return texto
     .split("\n")
     .map((l) => {
-      const m = CABECALHO.exec(l);
-      if (!m) return l;
+      const m = casarCabecalho(l);
+      if (!m || numeroDoRotulo(m.bruto) === null) return l;
       n++;
-      // Troca apenas o número, mantendo "CLÁUSULA", o ordinal e a pontuação.
-      return l.replace(/(\d{1,2})(\s*[ªº.\-–—:)])/, `${n}$2`);
+      const bruto = m.bruto;
+      let novo: string;
+      if (/^\d{1,2}$/.test(bruto)) novo = String(n);
+      else if (/^[ivxIVX]{1,5}$/.test(bruto)) novo = bruto === bruto.toUpperCase() ? romano(n) : romano(n).toLowerCase();
+      else novo = bruto === bruto.toUpperCase() ? extenso(n).toUpperCase() : capitalizar(extenso(n));
+      return l.replace(bruto, novo);
     })
     .join("\n");
 }
@@ -463,5 +566,127 @@ export function enriquecerComPainel(
   const extra = String(painel?.outras_informacoes ?? "").trim();
   if (extra) out.outras_informacoes = extra;
 
+  return out;
+}
+
+
+// ============================================================================
+// Qualificação completa por extenso
+//
+// O campo [QUALIFICAÇÃO COMPLETA DO COMPRADOR] espera a redação notarial
+// inteira, não um dado. Montá-la aqui — e não pedir ao modelo de linguagem —
+// garante que a mesma pessoa saia com a mesma redação em todos os atos.
+// ============================================================================
+
+const dt = (d?: string) => {
+  if (!d) return "";
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(d);
+};
+
+/** "portador do RG nº 12.345 SSP/SP, expedido em 01/02/2010" */
+function trechoIdentidade(d: any): string {
+  const num = String(d?.rg ?? "").trim();
+  if (!num) return "";
+  const partes = [
+    `portador(a) da cédula de identidade RG nº ${num}`,
+    d?.rg_orgao ? String(d.rg_orgao).trim() : "",
+    d?.rg_emissao ? `expedida em ${dt(d.rg_emissao)}` : "",
+  ].filter(Boolean);
+  return partes.join(", ");
+}
+
+function trechoEndereco(d: any): string {
+  const p = [d?.endereco, d?.bairro, d?.cidade, d?.cep ? `CEP ${d.cep}` : ""]
+    .map((x) => String(x ?? "").trim()).filter(Boolean);
+  return p.length ? `residente e domiciliado(a) na ${p.join(", ")}` : "";
+}
+
+/**
+ * Redação completa de uma parte. A ordem segue a praxe notarial:
+ * nome, nacionalidade, estado civil (com regime), profissão, identidade,
+ * CPF, endereço — e, havendo outorga, o cônjuge na sequência.
+ */
+export function qualificacaoCompleta(parte: any): string {
+  if (!parte?.nome) return "";
+  const d = parte.dados ?? {};
+
+  // Pessoa jurídica tem redação própria. Sem isto a construtora saía como
+  // "brasileiro(a), residente e domiciliado(a)" — erro que o Registro devolve.
+  const digitos = String(parte.cpf_cnpj ?? "").replace(/\D/g, "");
+  if (digitos.length === 14) {
+    const sede = [d.endereco, d.bairro, d.cidade, d.cep ? `CEP ${d.cep}` : ""]
+      .map((x: any) => String(x ?? "").trim()).filter(Boolean).join(", ");
+    const rep = d.representante || d.conjuge_nome;
+    return [
+      String(parte.nome).toUpperCase(),
+      "pessoa jurídica de direito privado",
+      `inscrita no CNPJ/MF sob o nº ${parte.cpf_cnpj}`,
+      sede ? `com sede na ${sede}` : "",
+      d.nire ? `NIRE ${d.nire}` : "",
+      rep ? `neste ato representada por ${String(rep).toUpperCase()}` : "",
+    ].filter(Boolean).join(", ");
+  }
+
+  const casado = /casad|uni[ãa]o est[áa]vel/i.test(String(d.estado_civil ?? ""));
+  const sepTotal = /separa[çc][ãa]o total/i.test(String(d.regime_bens ?? ""));
+
+  const civil = [
+    d.estado_civil,
+    casado && d.regime_bens ? `sob o regime de ${d.regime_bens}` : "",
+  ].filter(Boolean).join(", ");
+
+  const base = [
+    String(parte.nome).toUpperCase(),
+    d.nacionalidade || "brasileiro(a)",
+    civil,
+    d.profissao,
+    trechoIdentidade(d),
+    parte.cpf_cnpj ? `inscrito(a) no CPF/MF sob o nº ${parte.cpf_cnpj}` : "",
+    trechoEndereco(d),
+  ].map((x) => String(x ?? "").trim()).filter(Boolean).join(", ");
+
+  // Cônjuge só entra quando há outorga a colher.
+  if (casado && !sepTotal && d.conjuge_nome) {
+    const c = [
+      String(d.conjuge_nome).toUpperCase(),
+      d.conjuge_nacionalidade || "brasileiro(a)",
+      d.conjuge_profissao,
+      d.conjuge_rg ? `portador(a) do RG nº ${d.conjuge_rg}` : "",
+      d.conjuge_cpf ? `inscrito(a) no CPF/MF sob o nº ${d.conjuge_cpf}` : "",
+    ].map((x) => String(x ?? "").trim()).filter(Boolean).join(", ");
+    return `${base}, e seu(sua) cônjuge ${c}`;
+  }
+  return base;
+}
+
+/**
+ * Acrescenta ao dicionário as qualificações por extenso, por papel e para o
+ * conjunto de cada polo.
+ */
+export function enriquecerComPartes(
+  dic: Record<string, string>, partes: any[],
+): Record<string, string> {
+  const out = { ...dic };
+  const lista = partes ?? [];
+  const doPolo = (re: RegExp) => lista.filter((p) => re.test(String(p?.papel ?? "")));
+
+  const compradores = doPolo(/compra|adquir|outorgad|donat[áa]ri/i);
+  const vendedores = doPolo(/vend|outorgante|promitente|doador/i);
+
+  const juntar = (arr: any[]) => arr.map(qualificacaoCompleta).filter(Boolean).join("; e ");
+
+  if (compradores.length) {
+    out.qualificacao_comprador = juntar(compradores);
+    out.comprador_qualificacao = out.qualificacao_comprador;
+  }
+  if (vendedores.length) {
+    out.qualificacao_vendedor = juntar(vendedores);
+    out.vendedor_qualificacao = out.qualificacao_vendedor;
+  }
+  if (lista.length) {
+    out.qualificacao_completa = juntar(lista);
+    out.qualificacao_das_partes = out.qualificacao_completa;
+  }
   return out;
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import RodapeVersao from './RodapeVersao'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { STATUS_LABEL, type StatusSolicitacao } from '../lib/types'
@@ -109,6 +110,7 @@ export function Layout({ children, title }: { children: ReactNode; title?: strin
         <div className="app-conteudo">
           {title && <h1 className="font-serif text-2xl font-bold text-navy mb-5">{title}</h1>}
           {children}
+          <RodapeVersao />
         </div>
       </main>
     </div>

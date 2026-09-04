@@ -119,6 +119,14 @@ begin
     end if;
   end if;
 
+  -- ---------- poderes de quem assina pela construtora ----------
+  -- Definida na 23ª migration; a chamada é tolerante para que a 22ª continue
+  -- funcionando sozinha em bancos que ainda não aplicaram a seguinte.
+  begin
+    v_itens := v_itens || public.prontidao_poderes(p_solicitacao);
+  exception when undefined_function then null;
+  end;
+
   -- ---------- ônus ----------
   if coalesce(jsonb_array_length(v_sol.onus), 0) > 0 then
     v_itens := v_itens || jsonb_build_object('gravidade','atencao','item','Ônus na matrícula',

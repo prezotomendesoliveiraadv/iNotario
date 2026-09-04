@@ -50,6 +50,13 @@ union all
 select 'm22 · fn fila_do_dia',
        exists (select 1 from pg_proc where proname='fila_do_dia')
 union all
+select 'm23 · fn representantes_do_ato',
+       exists (select 1 from pg_proc where proname='representantes_do_ato')
+union all
+select 'm23 · documentos.parte_id',
+       exists (select 1 from information_schema.columns
+               where table_name='documentos' and column_name='parte_id')
+union all
 -- Duas registrar_custodia = sobrecarga não removida: o PostgREST recusa a
 -- chamada com "is not unique" e a abertura de solicitação quebra.
 select 'sanidade · registrar_custodia única',
